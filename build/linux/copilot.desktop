@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=copilot
+Comment=Microsoft Copilot desktop client
+Exec=/opt/copilot/copilot %U
+Icon=copilot               # If icon theme entry exists (preferred)
+# Alternatively, hardcode a path:
+# Icon=/usr/share/icons/hicolor/1024x1024/apps/copilot.png
+Terminal=false
+Categories=Network;Utility;Productivity;
+

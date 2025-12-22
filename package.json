@@ -1,0 +1,61 @@
+{
+  "name": "copilot-for-linux",
+  "version": "1.8.0",
+  "description": "Copilot for Linux",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --linux rpm"
+  },
+  "build": {
+    "appId": "com.company.copilot",
+    "productName": "copilot-for-linux",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*"
+    ],
+    "asarUnpack": ["assets/*.png"],
+    "linux": {
+      "executableName": "copilot-for-linux",
+      "target": [
+        {
+          "target": "rpm",
+          "arch": ["x64"]
+        }
+      ],
+      "category": "Utility",
+      "icon": "assets",
+      "maintainer": "Name <name@mail.com>",
+      "vendor": "Name <name@mail.com>",
+      "synopsis": "Copilot Electron App",
+      "description": "Copilot for Linux",
+      "desktop": {
+        "entry": {
+          "Name": "copilot-for-linux",
+          "Icon": "copilot-for-linux",
+          "Type": "Application",
+          "Comment": "Unofficial Microsoft Copilot client for Linux using Electron. It uses the Web App and wraps it as a standalone application using Electron.",
+          "StartupWMClass": "copilot-for-linux",
+          "Categories": "Network;Utility;Productivity"
+        }
+      }
+    },
+    "rpm": {
+      "artifactName": "${name}-${version}.${arch}.rpm",
+      "compression": "bzip2"
+    }
+  },
+  "homepage": "https://yourwebsite.com",
+  "author": {
+    "name": "Name",
+    "email": "name@mail.com"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12"
+  }
+}
+
