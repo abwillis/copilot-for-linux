@@ -368,32 +368,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       max-width: 100% !important;
     }
 
-    /* ===== Visible text selection inside code blocks ===== */
-    /* Make selection contrast strong and consistent on light/dark themes */
-    pre ::selection,
-    code ::selection,
-    kbd ::selection,
-    samp ::selection,
-    .fai-CopilotMessage__content pre ::selection,
-    .fai-CopilotMessage__content code ::selection {
-      background: #ffd666 !important;   /* warm yellow highlight */
-      color: #1a1a1a !important;        /* dark text for readability */
-    }
-    /* Firefox variant (kept narrow to code surfaces) */
-    pre ::-moz-selection,
-    code ::-moz-selection,
-    kbd ::-moz-selection,
-    samp ::-moz-selection {
-      background: #ffd666 !important;
-      color: #1a1a1a !important;
-    }
-    /* Guardrails: prevent styles that can hide selection overlay on code */
-    pre, code {
-      -webkit-text-fill-color: initial !important; /* avoid opaque text color */
-      mix-blend-mode: normal !important;           /* avoid blending into bg */
-      background-clip: border-box !important;      /* ensure highlight paints */
-    }
-
+ 
     /* Nested bubble containers in flex/grid layouts: force start alignment */
     ${SELECTORS.llmChatMessageClass} .message,
     ${SELECTORS.chatMessageContainerId} .message,
@@ -497,185 +472,9 @@ function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
   // Apply across all frames so we catch real content surfaces inside iframes
   injectCSSIntoAllFrames(win, css);
 }
-/*
-// --- Make the site use the full viewport by injecting JS (complements CSS) ---
-function applyMaxLayoutJS(win) {
-  if (!win) return;
-  const script = String.raw`
-    (function() {
-      try {
-        const head = document.head || document.getElementsByTagName('head')[0];
-        let mv = document.querySelector('meta[name="viewport"]');
-        if (!mv) { mv = document.createElement('meta'); mv.name = 'viewport'; head.appendChild(mv); }
-        mv.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover');
 
-        // Remove common max-width/margins on app shells/wrappers
-        const widen = (el) => {
-          try {
-            el.style.maxWidth = 'none';
-            el.style.width = '100vw';
-            el.style.margin = '0';
-            el.style.padding = '0';
-            el.style.paddingLeft = '0';
-            el.style.paddingRight = '0';
-            el.style.marginLeft = '0';
-            el.style.marginRight = '0';
-            el.style.overflow-x = 'hidden';
-            el.style.justify-self = 'start';
-            el.style.place-self = 'start';
-            el.style.boxSizing = 'border-box';
-          } catch {}
-        };
-      // Centralized ignore list (matches CSS IGNORE_SELECTORS)
-      const IGNORE = ${JSON.stringify([
-        '[class*="Drawer" i]',
-        '[class*="chatinput" i]',
-        '[class*="chat-input" i]',
-        '[class*="button" i]',
-        '[class*="Menu" i]',
-        '[class*="MessageBar" i]',
-        '[class*="usermessage" i]',
-        '[role="status"]',
-        '[role="tooltip"]',
-        '[class*="tooltip" i]',
-        '[class*="popover" i]',
-        '[class*="hover" i]',
-        '[data-tooltip]',
-        '[data-popover]',
-        '[aria-live]'
-      ])};
-      const IGNORE_QS = IGNORE.join(', ');
-        const selectors = ['#root', '#app', 'main', '.container', '.wrapper', '[class*="container"]', '[class*="wrapper"]'];
-        selectors.forEach(sel => document.querySelectorAll(sel).forEach(widen));
-
-      // Heuristic: walk up from the chat feed using a consistent preferred list
-      let feed = null;
-      const preferred = ${JSON.stringify([
-        '[data-testid="MessageListContainer"] [role="feed"]',
-        '[class*="CopilotChat"] [role="feed"]',
-        '[data-testid="layout-main-pane"]',
-        '[id*="chatMessageResponser"]',
-        '[data-testid="markdown-reply"]',
-        `[class*="m365-chat-llm-web-ui-chat-chat-message"]`,
-        `[id*="chatMessageContainer"]`,
-        `[data-testid="m365-chat-llm-web-ui-chat-message"]`,
-      ])};
-      for (var i = 0; i < preferred.length; i++) {
-        try { feed = document.querySelector(preferred[i]); } catch {}
-        if (feed) break;
-      }
-        let p = feed;
-        while (p && p.parentElement) {
-          const cs = getComputedStyle(p);
-          if (cs.maxWidth !== 'none' || parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) > 0) {
-            p.style.maxWidth = 'none';
-            p.style.width = '100vw';
-            p.style.margin = '0';
-            p.style.padding = '0';
-            p.style.paddingLeft = '0';
-            p.style.paddingRight = '0';
-            p.style.marginLeft = '0';
-            p.style.marginRight = '0';
-            p.style.overflow-x = 'hidden';
-            p.style.justify-self = 'start';
-            p.style.place-self = 'start';
-            p.style.boxSizing = 'border-box';
-          }
-          p = p.parentElement;
-        }
-        // Try to pierce shallow shadow roots (common in design systems)
-        document.querySelectorAll('*').forEach(el => {
-          try {
-          if (el.matches && el.matches(IGNORE_QS)) return; // skip ignored nodes
-            if (el.shadowRoot) {
-              el.shadowRoot.querySelectorAll('[class*="container"], [class*="wrapper"]').forEach(widen);
-            }
-          } catch {}
-        });
-      } catch (e) {
-        // swallow
-      }
-    
-        // --- NEW: observe DOM changes and re-run widening heuristics ---
-        try {
-          if (!window.__copilot_layoutObserver) {
-            const observer = new MutationObserver(() => {
-              try {
-                // Re-apply widening to common wrappers
-                ['#root', '#app', 'main', '.container', '.wrapper', '[class*="container"]', '[class*="wrapper"]']
-                  .forEach(sel => document.querySelectorAll(sel).forEach(widen));
-
-            // Sweep outward from the feed using the same preferred list
-            let feed = null;
-            const preferred = ${JSON.stringify([
-              '[data-testid="MessageListContainer"] [role="feed"]',
-              '[class*="CopilotChat"] [role="feed"]',
-              '[data-testid="layout-main-pane"]',
-              '[id*="chatMessageResponser"]',
-              '[data-testid="markdown-reply"]'
-            ])};
-            for (var i = 0; i < preferred.length; i++) {
-              try { feed = document.querySelector(preferred[i]); } catch {}
-              if (feed) break;
-            }
-                if (feed) {
-                  let p = feed;
-                  while (p && p.parentElement) {
-                    const cs = getComputedStyle(p);
-                    if (cs.maxWidth !== 'none' || (parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) > 0)) {
-                      p.style.maxWidth = 'none';
-                      p.style.width = '100vw';
-                      p.style.paddingLeft = '0';
-                      p.style.paddingRight = '0';
-                      p.style.marginLeft = '0';
-                      p.style.marginRight = '0';
-                    }
-                    p = p.parentElement;
-                  }
-                }
-
-                // Shallow shadow roots again
-                document.querySelectorAll('*').forEach(el => {
-                  try {
-                    if (el.matches && el.matches(IGNORE_QS)) return; // skip ignored nodes  
-                    if (el.shadowRoot) {
-                      el.shadowRoot.querySelectorAll('[class*="container"], [class*="wrapper"]').forEach(widen);
-                    }
-                  } catch {}
-                });
-              } catch {}
-            });
-
-            observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
-            window.__copilot_layoutObserver = observer;
-          }
-        } catch {}
-
-    })();
-`;
-
-  const cleanup = `(function(){
-    try {
-      if (window.__copilot_layoutObserver) {
-        window.__copilot_layoutObserver.disconnect();
-        window.__copilot_layoutObserver = null;
-      }
-    } catch {}
-  })();`;
-  const run = () => {
-    try { win.webContents.executeJavaScript(script).catch(() => {}); }
-    catch (err) { console.error('applyMaxLayoutJS failed:', err); }
-  };
-  win.webContents.on('dom-ready', run);
-  win.webContents.on('did-finish-load', run);
-  win.webContents.on('did-frame-finish-load', run);
-  win.webContents.on('did-navigate-in-page', run);
-  win.webContents.on('did-frame-finish-load', run); // ensure iframe-injected pages get updated
-  win.webContents.on('did-start-navigation', () => { try { win.webContents.executeJavaScript(cleanup).catch(() => {}); } catch {} }); // ensure iframe-injected pages get updated
-  run();
-}
-*/
 // --- NEW: enforce visible selection colors within shallow shadow roots ---
+/*
 function enforceVisibleSelectionInShadows(win) {
   if (!win) return;
   const css = `
@@ -715,8 +514,9 @@ function enforceVisibleSelectionInShadows(win) {
   wc.on('did-navigate-in-page', apply);
   apply();
 }
-
+*/
 // --- NEW (fixed): Paint a visible overlay using CSS Custom Highlight API ---
+/*
 function installSelectionOverlay(win) {
   if (!win) return;
   const wc = win.webContents;
@@ -761,8 +561,9 @@ function installSelectionOverlay(win) {
   wc.on('did-navigate-in-page', run);
   run();
 }
-
+*/
 // --- OPTIONAL: last-resort fallback when CSS Custom Highlight is not supported ---
+/*
 function installSelectionFallback(win) {
   if (!win) return;
   const wc = win.webContents;
@@ -806,7 +607,7 @@ function installSelectionFallback(win) {
   wc.on('did-navigate-in-page', run);
   run();
 }
-
+*/
 function requestExpandedLayout(win) {
   if (!win) return;
   const script = `
@@ -1683,10 +1484,10 @@ function createWindow() {
 //  try { enforceNoHScroll(mainWindow); } catch (e) { console.error('enforceNoHScroll failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
   try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
-  try { enforceVisibleSelectionInShadows(mainWindow); } catch (e) { console.error('selection shadow inject failed:', e); }
-  try { installSelectionOverlay(mainWindow); } catch (e) { console.error('installSelectionOverlay failed:', e); }
+//  try { enforceVisibleSelectionInShadows(mainWindow); } catch (e) { console.error('selection shadow inject failed:', e); }
+//  try { installSelectionOverlay(mainWindow); } catch (e) { console.error('installSelectionOverlay failed:', e); }
    // Fallback (no-op if Custom Highlight API exists)
-  try { installSelectionFallback(mainWindow); } catch (e) { console.error('installSelectionFallback failed:', e); }
+//  try { installSelectionFallback(mainWindow); } catch (e) { console.error('installSelectionFallback failed:', e); }
 
   // Build native context menu purely from main, based on Chromium's params
 
