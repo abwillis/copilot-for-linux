@@ -138,7 +138,8 @@ const IGNORE_SELECTORS = [
   `[class*="flyout" i]` ,
   `[class*="contextualMenu" i]` ,
   `[class*="usermessage" i] ` ,
-  `[id*="user-message"]` 
+  `[id*="user-message"]` ,
+  `[class*="actionsContainer"]`
 ];
 const IGNORE_JOINED = IGNORE_SELECTORS.join(', ');
 
@@ -407,12 +408,15 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       word-break: break-word !important;
     }
 
-  [class*="tooltip" i] {
+  [class*="tooltip" i],
+  [class*="fui-Tab__content"] {
   display: inline-block !important;   /* Allows width to fit content */
   width: fit-content !important;      /* Shrinks to text width */
   height: fit-content !important;     /* Shrinks to text height */
   padding: 0 !important;              /* Optional: remove extra space */
   margin: 0 !important;               /* Optional: remove extra space */
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
 }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
@@ -473,6 +477,141 @@ function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
   injectCSSIntoAllFrames(win, css);
 }
 
+// --- NEW: enforce visible selection colors within shallow shadow roots ---
+/*
+function enforceVisibleSelectionInShadows(win) {
+  if (!win) return;
+  const css = `
+    pre ::selection, code ::selection, kbd ::selection, samp ::selection {
+      background: #ffd666 !important;
+      color: #1a1a1a !important;
+    }
+    pre ::-moz-selection, code ::-moz-selection, kbd ::-moz-selection, samp ::-moz-selection {
+      background: #ffd666 !important;
+      color: #1a1a1a !important;
+    }
+    pre, code { -webkit-text-fill-color: initial !important; mix-blend-mode: normal !important; background-clip: border-box !important; }
+  `;
+  const wc = win.webContents;
+  const apply = () => {
+    try {
+      // Main frame stylesheet
+      wc.insertCSS(css).catch(() => {});
+      // Inject into shallow shadow roots
+      wc.executeJavaScript(`
+        (function(){
+          document.querySelectorAll('*').forEach(el => {
+            try {
+              if (el.shadowRoot) {
+                const style = document.createElement('style');
+                style.textContent = ${'`'}${'${css.replace(/`/g, "\\`") }'}${'`'};
+                el.shadowRoot.appendChild(style);
+              }
+            } catch(e){}
+          });
+        })();
+      `).catch(() => {});
+    } catch {}
+  };
+  wc.on('dom-ready', apply);
+  wc.on('did-frame-finish-load', apply);
+  wc.on('did-navigate-in-page', apply);
+  apply();
+}
+*/
+// --- NEW (fixed): Paint a visible overlay using CSS Custom Highlight API ---
+/*
+function installSelectionOverlay(win) {
+  if (!win) return;
+  const wc = win.webContents;
+  // 1) Push CSS via insertCSS (plain JS string, no raw CSS in main.js)
+  const overlayCSS =
+    '::highlight(copilotSelection){' +
+    '  background:#ffd666!important;' +
+    '  color:#1a1a1a!important;' +
+    '  text-decoration:none!important;' +
+    '  -webkit-text-fill-color:initial!important;' +
+    '  mix-blend-mode:normal!important;' +
+    '}';
+  // 2) Runtime: mirror current selection ranges into CSS.highlights
+  const overlayJS =
+    '(function(){' +
+    '  try{' +
+    '    var supports=!!(window.CSS && CSS.highlights && typeof Highlight==="function");' +
+    '    if(!supports) return;' +
+    '    var NAME="copilotSelection";' +
+    '    function setRanges(){' +
+    '      try{' +
+    '        var sel=window.getSelection && window.getSelection();' +
+    '        if(!sel || sel.rangeCount===0 || String(sel.toString()).trim()===""){CSS.highlights.delete(NAME);return;}' +
+    '        var ranges=[]; for(var i=0;i<sel.rangeCount;i++){var r=sel.getRangeAt(i); if(!r.collapsed) ranges.push(r);} ' +
+    '        if(ranges.length===0){CSS.highlights.delete(NAME);return;}' +
+    '        var hl=new Highlight(...ranges); CSS.highlights.set(NAME,hl);' +
+    '      }catch(e){}' +
+    '    }' +
+    '    function reapply(){setRanges();}' +
+    '    document.addEventListener("selectionchange", reapply, {passive:true});' +
+    '    document.addEventListener("pointerup", reapply, {passive:true});' +
+    '    document.addEventListener("keyup", reapply, {passive:true});' +
+    '    setRanges();' +
+    '  }catch(e){}' +
+    '})();';
+  const run = () => {
+    try { wc.insertCSS(overlayCSS).catch(()=>{}); } catch {}
+    try { wc.executeJavaScript(overlayJS).catch(()=>{}); } catch {}
+  };
+  wc.on('dom-ready', run);
+  wc.on('did-frame-finish-load', run);
+  wc.on('did-navigate-in-page', run);
+  run();
+}
+*/
+// --- OPTIONAL: last-resort fallback when CSS Custom Highlight is not supported ---
+/*
+function installSelectionFallback(win) {
+  if (!win) return;
+  const wc = win.webContents;
+  const script = `
+    (function(){
+      try {
+        const supportsHighlight = !!(window.CSS && CSS.highlights && typeof Highlight === 'function');
+        if (supportsHighlight) return; // let Option C handle it
+        // Create a style that we can toggle when selection exists
+        let style = document.getElementById('copilot-selection-fallback-style');
+        if (!style) {
+          style = document.createElement('style');
+          style.id = 'copilot-selection-fallback-style';
+          style.disabled = true;
+          style.textContent = \`
+            pre ::selection, code ::selection, kbd ::selection, samp ::selection {
+              background: #ffd666 !important;
+              color: #1a1a1a !important;
+            }
+            pre, code { -webkit-text-fill-color: initial !important; mix-blend-mode: normal !important; }
+          \`;
+          (document.head || document.documentElement).appendChild(style);
+        }
+        const update = () => {
+          try {
+            const sel = window.getSelection && window.getSelection();
+            const has = !!(sel && sel.rangeCount > 0 && String(sel.toString()).trim() !== '');
+            style.disabled = !has;
+          } catch (e) {}
+        };
+        document.addEventListener('selectionchange', update, { passive: true });
+        document.addEventListener('pointerup', update, { passive: true });
+        document.addEventListener('keyup', update, { passive: true });
+        update();
+      } catch(e){ }
+    })();
+  `;
+  const run = () => { try { wc.executeJavaScript(script).catch(() => {}); } catch {} };
+  wc.on('dom-ready', run);
+  wc.on('did-frame-finish-load', run);
+  wc.on('did-navigate-in-page', run);
+  run();
+}
+*/
 function requestExpandedLayout(win) {
   if (!win) return;
   const script = `
