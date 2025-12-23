@@ -477,141 +477,6 @@ function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
   injectCSSIntoAllFrames(win, css);
 }
 
-// --- NEW: enforce visible selection colors within shallow shadow roots ---
-/*
-function enforceVisibleSelectionInShadows(win) {
-  if (!win) return;
-  const css = `
-    pre ::selection, code ::selection, kbd ::selection, samp ::selection {
-      background: #ffd666 !important;
-      color: #1a1a1a !important;
-    }
-    pre ::-moz-selection, code ::-moz-selection, kbd ::-moz-selection, samp ::-moz-selection {
-      background: #ffd666 !important;
-      color: #1a1a1a !important;
-    }
-    pre, code { -webkit-text-fill-color: initial !important; mix-blend-mode: normal !important; background-clip: border-box !important; }
-  `;
-  const wc = win.webContents;
-  const apply = () => {
-    try {
-      // Main frame stylesheet
-      wc.insertCSS(css).catch(() => {});
-      // Inject into shallow shadow roots
-      wc.executeJavaScript(`
-        (function(){
-          document.querySelectorAll('*').forEach(el => {
-            try {
-              if (el.shadowRoot) {
-                const style = document.createElement('style');
-                style.textContent = ${'`'}${'${css.replace(/`/g, "\\`") }'}${'`'};
-                el.shadowRoot.appendChild(style);
-              }
-            } catch(e){}
-          });
-        })();
-      `).catch(() => {});
-    } catch {}
-  };
-  wc.on('dom-ready', apply);
-  wc.on('did-frame-finish-load', apply);
-  wc.on('did-navigate-in-page', apply);
-  apply();
-}
-*/
-// --- NEW (fixed): Paint a visible overlay using CSS Custom Highlight API ---
-/*
-function installSelectionOverlay(win) {
-  if (!win) return;
-  const wc = win.webContents;
-  // 1) Push CSS via insertCSS (plain JS string, no raw CSS in main.js)
-  const overlayCSS =
-    '::highlight(copilotSelection){' +
-    '  background:#ffd666!important;' +
-    '  color:#1a1a1a!important;' +
-    '  text-decoration:none!important;' +
-    '  -webkit-text-fill-color:initial!important;' +
-    '  mix-blend-mode:normal!important;' +
-    '}';
-  // 2) Runtime: mirror current selection ranges into CSS.highlights
-  const overlayJS =
-    '(function(){' +
-    '  try{' +
-    '    var supports=!!(window.CSS && CSS.highlights && typeof Highlight==="function");' +
-    '    if(!supports) return;' +
-    '    var NAME="copilotSelection";' +
-    '    function setRanges(){' +
-    '      try{' +
-    '        var sel=window.getSelection && window.getSelection();' +
-    '        if(!sel || sel.rangeCount===0 || String(sel.toString()).trim()===""){CSS.highlights.delete(NAME);return;}' +
-    '        var ranges=[]; for(var i=0;i<sel.rangeCount;i++){var r=sel.getRangeAt(i); if(!r.collapsed) ranges.push(r);} ' +
-    '        if(ranges.length===0){CSS.highlights.delete(NAME);return;}' +
-    '        var hl=new Highlight(...ranges); CSS.highlights.set(NAME,hl);' +
-    '      }catch(e){}' +
-    '    }' +
-    '    function reapply(){setRanges();}' +
-    '    document.addEventListener("selectionchange", reapply, {passive:true});' +
-    '    document.addEventListener("pointerup", reapply, {passive:true});' +
-    '    document.addEventListener("keyup", reapply, {passive:true});' +
-    '    setRanges();' +
-    '  }catch(e){}' +
-    '})();';
-  const run = () => {
-    try { wc.insertCSS(overlayCSS).catch(()=>{}); } catch {}
-    try { wc.executeJavaScript(overlayJS).catch(()=>{}); } catch {}
-  };
-  wc.on('dom-ready', run);
-  wc.on('did-frame-finish-load', run);
-  wc.on('did-navigate-in-page', run);
-  run();
-}
-*/
-// --- OPTIONAL: last-resort fallback when CSS Custom Highlight is not supported ---
-/*
-function installSelectionFallback(win) {
-  if (!win) return;
-  const wc = win.webContents;
-  const script = `
-    (function(){
-      try {
-        const supportsHighlight = !!(window.CSS && CSS.highlights && typeof Highlight === 'function');
-        if (supportsHighlight) return; // let Option C handle it
-        // Create a style that we can toggle when selection exists
-        let style = document.getElementById('copilot-selection-fallback-style');
-        if (!style) {
-          style = document.createElement('style');
-          style.id = 'copilot-selection-fallback-style';
-          style.disabled = true;
-          style.textContent = \`
-            pre ::selection, code ::selection, kbd ::selection, samp ::selection {
-              background: #ffd666 !important;
-              color: #1a1a1a !important;
-            }
-            pre, code { -webkit-text-fill-color: initial !important; mix-blend-mode: normal !important; }
-          \`;
-          (document.head || document.documentElement).appendChild(style);
-        }
-        const update = () => {
-          try {
-            const sel = window.getSelection && window.getSelection();
-            const has = !!(sel && sel.rangeCount > 0 && String(sel.toString()).trim() !== '');
-            style.disabled = !has;
-          } catch (e) {}
-        };
-        document.addEventListener('selectionchange', update, { passive: true });
-        document.addEventListener('pointerup', update, { passive: true });
-        document.addEventListener('keyup', update, { passive: true });
-        update();
-      } catch(e){ }
-    })();
-  `;
-  const run = () => { try { wc.executeJavaScript(script).catch(() => {}); } catch {} };
-  wc.on('dom-ready', run);
-  wc.on('did-frame-finish-load', run);
-  wc.on('did-navigate-in-page', run);
-  run();
-}
-*/
 function requestExpandedLayout(win) {
   if (!win) return;
   const script = `
@@ -893,6 +758,46 @@ function appendEditItems(editSubmenu) {
   Menu.buildFromTemplate(template).items.forEach(i => editSubmenu.append(i));
 }
 
+// --- Help menu: add About… screen (under the menu bar) ----------------------
+function appendHelpItems(helpSubmenu) {
+  const template = [
+    new MenuItem({
+      label: 'About…',
+      // Optional: make F1 open About; change/remove if you already use F1 elsewhere
+      accelerator: 'F1',
+      click: async () => {
+        try {
+          const info = getRuntimeInfo();
+          await dialog.showMessageBox({
+            type: 'info',
+            buttons: ['OK'],
+            defaultId: 0,
+            title: `About ${info.name}`,
+            message: `${info.name}`,
+            detail: info.detail,
+            noLink: true,
+            icon: appIconImage
+          });
+        } catch (err) {
+          console.error('Help→About dialog failed:', err);
+        }
+      }
+    }),
+    new MenuItem({ type: 'separator' }),
+    // (Optional) quick links; uncomment/adjust as needed:
+    // new MenuItem({
+    //   label: 'Documentation',
+    //   click: () => shell.openExternal('https://your.docs.url/')
+    // }),
+    // new MenuItem({
+    //   label: 'Report Issue…',
+    //   click: () => shell.openExternal('https://your.issues.url/')
+    // }),
+  ];
+  template.forEach(i => helpSubmenu.append(i));
+}
+
+
 // Augment (mutate) the existing app menu rather than replacing it
 function augmentApplicationMenu(win) {
   // Start from the current application menu.
@@ -914,6 +819,15 @@ function augmentApplicationMenu(win) {
     appMenu.insert(1, new MenuItem({ label: 'Edit', submenu: editSubmenu }));
   }
   appendEditItems(editSubmenu);
+
+  // Ensure "Help" submenu exists, then append our items
+  let helpSubmenu = appMenu.items.find(i => i.label === 'Help')?.submenu;
+  if (!helpSubmenu) {
+    helpSubmenu = new Menu();
+    // Place Help at the end for Windows/Linux conventions
+    appMenu.append(new MenuItem({ label: 'Help', submenu: helpSubmenu }));
+  }
+  appendHelpItems(helpSubmenu);
 
   // Re-apply the mutated menu so the OS picks up changes
   Menu.setApplicationMenu(appMenu);
