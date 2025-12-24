@@ -84,6 +84,7 @@ const SELECTORS = {
   llmChatMessageClass: `[class*="m365-chat-llm-web-ui-chat-chat-message"]`,
   chatMessageContainerId: `[id*="chatMessageContainer"]`,
   llmChatMessageTestId: `[data-testid="m365-chat-llm-web-ui-chat-message"]`,
+  copilotMessageTestId: `[data-testid*="copilot-message"]`,
 
   // Content targets (do NOT force height: 100vh here)H
   allMessageContent_class:
@@ -99,7 +100,7 @@ const SELECTORS = {
   minimalSemantic:
     '${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] > [id^="copilot-message-"]',
 };
-
+/*
 const PREFERRED_CONTAINER_SELECTORS = [
   SELECTORS.feedContainer,
   SELECTORS.copilotChatClass,
@@ -107,7 +108,7 @@ const PREFERRED_CONTAINER_SELECTORS = [
   SELECTORS.chatMessageResponserId,
   SELECTORS.markdownReplyTestId,
 ];
-
+*/
 // --- Centralized ignore list: ALWAYS excluded from layout adjustments ---
 const IGNORE_SELECTORS = [
   `[class*="Drawer" i]`,
@@ -128,7 +129,6 @@ const IGNORE_SELECTORS = [
   `[class*="hover" i]`,
   `[data-tooltip]`,
   `[data-popover]`,
-  `[aria-live]` ,
   `[role*="toolbar"]`,
   `[data-testid*="message-actions" i]` ,
   `[data-testid*="hover" i]` ,
@@ -218,6 +218,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     SELECTORS.llmChatMessageClass,
     SELECTORS.chatMessageContainerId,
     SELECTORS.llmChatMessageTestId,
+    SELECTORS.copilotMessageTestId,
   ].join(',\n');
 
   const CONTENT = [
@@ -282,7 +283,8 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     [data-testid="markdown-reply"],
     [class*="m365-chat-llm-web-ui-chat-chat-message"],
     [id*="chatMessageContainer"],
-    [data-testid="m365-chat-llm-web-ui-chat-message"] {
+    [data-testid="m365-chat-llm-web-ui-chat-message"],
+    [data-testid*="copilot-message"] {
       width: 100% !important;
       max-width: none !important;
       min-width: 0 !important;
