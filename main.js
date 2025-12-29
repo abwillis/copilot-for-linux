@@ -89,8 +89,8 @@ const SELECTORS = {
   // Content targets (do NOT force height: 100vh here)H
   allMessageContent_class:
     '${MESSAGE_LIST_SCOPE} [role="feed"] .fai-CopilotMessage .fai-CopilotMessage__content',
- // allMessageContent_class_lowSpecificity:
- //   '${MESSAGE_LIST_SCOPE} :where([role="feed"]) :where(.fai-CopilotMessage) :where(.fai-CopilotMessage__content)',
+  allMessageContent_class_lowSpecificity:
+    '${MESSAGE_LIST_SCOPE} :where([role="feed"]) :where(.fai-CopilotMessage) :where(.fai-CopilotMessage__content)',
   allMessageContent_attr:
     '${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"][aria-labelledby*="copilot-message-" i] > div[id^="copilot-message-" i]',
   linksInContent_class:
@@ -224,8 +224,9 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
   const CONTENT = [
     specificMessageId ? messageContentById(specificMessageId) : null,
     SELECTORS.allMessageContent_class,
-//    SELECTORS.allMessageContent_class_lowSpecificity,
+    SELECTORS.allMessageContent_class_lowSpecificity,
     SELECTORS.allMessageContent_attr,
+   `${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"]`,
     SELECTORS.linksInContent_class,
     SELECTORS.linksInContent_attr,
     SELECTORS.minimalSemantic,
@@ -304,9 +305,9 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
 
     ${SELECTORS.llmChatMessageClass},
     ${SELECTORS.chatMessageContainerId},
-    ${SELECTORS.llmChatMessageTestId} {
+    ${SELECTORS.llmChatMessageTestId},
+    ${SELECTORS.copilotMessageTestId} {
       /* eliminate left/right padding/margins that cause right shift */
-      margin-left: 50 !important;
       margin-right: 0 !important;
       padding-left: 0 !important;
       padding-right: 0 !important;
@@ -328,7 +329,6 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     ${SELECTORS.llmChatMessageClass} *,
     ${SELECTORS.chatMessageContainerId} *,
     ${SELECTORS.llmChatMessageTestId} * {
-      margin-left: 50 !important;
       padding-left: 0 !important;
     }
 
@@ -358,6 +358,46 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       white-space: normal !important;
     }
 
+    /* Catch-all bubble alignment + wrapping for any Copilot message */
+    ${SELECTORS.feedContainer} [role="article"] > [id^="copilot-message-" i],
+    ${SELECTORS.feedContainer} [role="article"] [id^="copilot-message-" i],
+    ${SELECTORS.feedContainer} .fai-CopilotMessage,
+    ${SELECTORS.feedContainer} .fai-CopilotMessage__content {
+      margin-left: 0 !important;
+      padding-left: 0 !important;
+      text-align: left !important;
+      justify-content: flex-start !important;
+      align-items: flex-start !important;
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+      white-space: normal !important;
+      width: 100% !important;
+      max-width: none !important;
+      box-sizing: border-box !important;
+    }
+
+   /* Make every message article bubble full-width and text-wrapping */
+   ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] {
+     width: 100% !important;
+     max-width: none !important;
+     box-sizing: border-box !important;
+     text-align: left !important;
+     overflow-wrap: anywhere !important;
+     word-break: break-word !important;
+     white-space: normal !important;
+   }
+
+    /* Ensure plain text elements wrap within message articles */
+    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] p,
+    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] li,
+    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] ul,
+    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] ol,
+    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] blockquote {
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+      white-space: normal !important;
+    }
+
     /* --- Ensure code blocks and inline code wrap inside bubbles --- */
     ${SELECTORS.llmChatMessageClass} pre,
     ${SELECTORS.llmChatMessageClass} code,
@@ -375,11 +415,22 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     /* Nested bubble containers in flex/grid layouts: force start alignment */
     ${SELECTORS.llmChatMessageClass} .message,
     ${SELECTORS.chatMessageContainerId} .message,
-    ${SELECTORS.llmChatMessageTestId} .message 
-
-    /* Containers (feed/list): vertical scroll only; no horizontal */
-
-
+    ${SELECTORS.llmChatMessageTestId} .message,
+    ${SELECTORS.copilotMessageTestId} .message {
+      justify-content: flex-start !important;
+      align-items: flex-start !important;
+      place-content: start !important;
+      place-items: start !important;
+      text-align: left !important;
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+      white-space: normal !important;
+      margin-left: 0 !important;
+      padding-left: 0 !important;
+      width: 100% !important;
+      max-width: none !important;
+      box-sizing: border-box !important;
+    }
 
     /* Clamp wide media/code to container width; preserve aspect ratio */
     ${SELECTORS.feedContainer} img,
@@ -1399,7 +1450,7 @@ function createWindow() {
   mainWindow.loadURL('https://m365.cloud.microsoft/chat');  // Load your app
 
   try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
-  try { applyMaxLayoutCSS(mainWindow, { specificMessageId: 'copilot-message-r8g' }); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
+  try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
 //  try { applyMaxLayoutJS(mainWindow); } catch (e) { console.error('applyMaxLayoutJS (outer) failed:', e); }
 //  try { enforceNoHScroll(mainWindow); } catch (e) { console.error('enforceNoHScroll failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
