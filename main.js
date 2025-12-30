@@ -11,6 +11,15 @@ let findModal = null;  // === Find modal ===
 let appIconImage = null;  // Cached icon images
 let trayImage24 = null;  // Cached icon images
 
+  // Unified reveal helper to avoid repeated show/focus chains
+  function reveal(win) {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    win.focus();
+    try { win.moveTop(); } catch {}
+  }
+
 // --- Make the site use the full viewport by injecting CSS (CSP-safe) ---
 const CHAT_SELECTOR = '#mainChat';  // Root container for the chat UI
 const MESSAGE_LIST_SCOPE = '#mainChat div[id*="messagelist" i]';
@@ -1420,15 +1429,6 @@ function createWindow() {
     });
   }   
   // --- end context menu ---
-
-  // Unified reveal helper to avoid repeated show/focus chains
-  function reveal(win) {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    if (!win.isVisible()) win.show();
-    win.focus();
-    try { win.moveTop(); } catch {}
-  }
 
   mainWindow.setIcon(appIconImage || taIcon);
 
