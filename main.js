@@ -11,6 +11,105 @@ let findModal = null;  // === Find modal ===
 let appIconImage = null;  // Cached icon images
 let trayImage24 = null;  // Cached icon images
 
+ // --- Copilot target selection (work vs internet) ---
+ const APP_CONFIG_FILE = path.join(app.getPath('userData'), 'config.json');
+ const COPILOT_ENDPOINTS = {
+   m365: 'https://m365.cloud.microsoft/chat',      // Microsoft 365 Copilot Chat (work)
+   internet: 'https://copilot.microsoft.com/'      // Internet Copilot (web)
+ };
+ const DEFAULT_TARGET = 'm365'; // preserve current behavior unless overridden
+ 
+ function readAppConfig() {
+   try { return JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf8')); } catch { return {}; }
+ }
+ function writeAppConfig(cfg) {
+   try {
+     fs.mkdirSync(path.dirname(APP_CONFIG_FILE), { recursive: true });
+     fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+   } catch (e) { console.warn('Config persist failed:', e.message); }
+ }
+ function resolveTarget() {
+   const env = (process.env.COPILOT_TARGET || '').toLowerCase();
+   const cfg = readAppConfig();
+   const persisted = typeof cfg.target === 'string' ? cfg.target.toLowerCase() : null;
+   const t = env || persisted || DEFAULT_TARGET;
+   return (t === 'internet' ? 'internet' : 'm365');
+ }
+ function isM365Target(target) { return target === 'm365'; }
+ function targetSuffix(target) {
+   return target === 'internet' ? ' — Internet Copilot' : ' — Microsoft 365 Copilot';
+ }
+ function applyTitleSuffix(win, target) {
+   const setTitle = () => {
+     try {
+       const base = app.getName?.() || 'copilot-for-linux';
+       win.setTitle(`${base}${targetSuffix(target)}`);
+     } catch {}
+   };
+   // keep suffix consistent even if page changes its title
+   try {
+     win.on('page-title-updated', (event) => { event.preventDefault(); setTitle(); });
+   } catch {}
+   setTitle();
+ }
+ function injectStatusOverlay(win, target, visible = true) {
+   if (!win || !win.webContents) return;
+   const script = `
+   (function(){
+     try {
+       const id='__copilot_status_overlay';
+       const sid='__copilot_status_style';
+       let style=document.getElementById(sid);
+       if(!style){
+         style=document.createElement('style'); style.id=sid;
+         style.textContent=\`
+           #\${id}{
+             position:fixed; top:10px; left:10px; z-index:2147483647;
+             padding:6px 10px; background:rgba(0,0,0,.65); color:#fff;
+             font:12px/1.3 system-ui,Segoe UI,Arial,sans-serif;
+             border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,.25);
+             user-select:none; pointer-events:none;
+           }
+           @media (prefers-color-scheme: light){ #\${id}{ background:rgba(0,0,0,.55); } }
+         \`;
+         document.documentElement.appendChild(style);
+       }
+       let el=document.getElementById(id);
+       if(!el){
+         el=document.createElement('div'); el.id=id; document.documentElement.appendChild(el);
+       }
+       el.textContent = 'Copilot: ' + (${JSON.stringify(target)} === 'internet' ? 'Internet' : 'Work (M365)');
+       el.style.display = ${visible ? `'block'` : `'none'`};
+       window.__copilot_overlay_visible = ${visible ? 'true' : 'false'};
+       window.__copilot_set_overlay = function(show){ try{
+         var e=document.getElementById('${'__copilot_status_overlay'}'); if(!e) return;
+         e.style.display = show ? 'block' : 'none';
+         window.__copilot_overlay_visible = !!show;
+       }catch{} };
+       window.__copilot_update_overlay = function(mode){ try{
+         var e=document.getElementById('${'__copilot_status_overlay'}'); if(!e) return;
+         e.textContent = 'Copilot: ' + (mode==='internet' ? 'Internet' : 'Work (M365)');
+       }catch{} };
+     } catch(e) {}
+   })();
+   `;
+   try { win.webContents.executeJavaScript(script).catch(()=>{}); } catch {}
+ }
+ function loadCopilot(target) {
+   const url = COPILOT_ENDPOINTS[target] || COPILOT_ENDPOINTS.m365;
+   try { mainWindow.loadURL(url); } catch (e) { console.error('loadCopilot failed:', e); }
+ }
+ function setTarget(target, options = {}) {
+   const t = (target === 'internet') ? 'internet' : 'm365';
+   const cfg = readAppConfig();
+   cfg.target = t;
+   writeAppConfig(cfg);
+   loadCopilot(t);
+   applyTitleSuffix(mainWindow, t);
+   injectStatusOverlay(mainWindow, t, options.overlayVisible ?? true);
+   reveal(mainWindow);
+ }
+
   // Unified reveal helper to avoid repeated show/focus chains
   function reveal(win) {
     if (!win) return;
@@ -891,6 +990,27 @@ function augmentApplicationMenu(win) {
   }
   appendHelpItems(helpSubmenu);
 
+  // --- New: Copilot menu for target selection ---
+  const copilotSubmenu = new Menu();
+  copilotSubmenu.append(new MenuItem({
+    label: 'Connect to Internet Copilot',
+    accelerator: 'Ctrl+Shift+W',
+    click: () => setTarget('internet')
+  }));
+  copilotSubmenu.append(new MenuItem({
+    label: 'Connect to Microsoft 365 Copilot',
+    accelerator: 'Ctrl+Shift+K',
+    click: () => setTarget('m365')
+  }));
+  copilotSubmenu.append(new MenuItem({
+    label: 'Toggle Status Overlay',
+    accelerator: 'Ctrl+Shift+O',
+    click: () => {
+      try { win.webContents.executeJavaScript('(function(){var f=window.__copilot_set_overlay; if(typeof f!==\"function\") return; var cur=!!window.__copilot_overlay_visible; f(!cur);})();'); } catch {}
+    }
+  }));
+  appMenu.append(new MenuItem({ label: 'Copilot', submenu: copilotSubmenu }));
+
   // Re-apply the mutated menu so the OS picks up changes
   Menu.setApplicationMenu(appMenu);
 }
@@ -1447,27 +1567,38 @@ function createWindow() {
   // const _origOn = mainWindow.webContents.on.bind(mainWindow.webContents);
   // mainWindow.webContents.on = (evt, fn) => { if (evt === 'did-stop-loading') console.trace('[TRACE] did-stop-loading on()'); return _origOn(evt, fn); };
 
-  mainWindow.loadURL('https://m365.cloud.microsoft/chat');  // Load your app
-
-  try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
-  try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
-//  try { applyMaxLayoutJS(mainWindow); } catch (e) { console.error('applyMaxLayoutJS (outer) failed:', e); }
-//  try { enforceNoHScroll(mainWindow); } catch (e) { console.error('enforceNoHScroll failed:', e); }
-  try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
-  try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
-//  try { enforceVisibleSelectionInShadows(mainWindow); } catch (e) { console.error('selection shadow inject failed:', e); }
-//  try { installSelectionOverlay(mainWindow); } catch (e) { console.error('installSelectionOverlay failed:', e); }
-   // Fallback (no-op if Custom Highlight API exists)
-//  try { installSelectionFallback(mainWindow); } catch (e) { console.error('installSelectionFallback failed:', e); }
-
-  // Build native context menu purely from main, based on Chromium's params
-
-  // Keep the 'did-stop-loading' handler singular when SPA navigations occur.
+  // --- Target-aware initial load & UI adornments ---
+  const initialTarget = resolveTarget();
+  loadCopilot(initialTarget);
+  applyTitleSuffix(mainWindow, initialTarget);
+  injectStatusOverlay(mainWindow, initialTarget, true);
+  // Only apply M365-specific layout hooks on the work (m365) target
+  if (isM365Target(initialTarget)) {
+    try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
+    try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
+  }
+  if (isM365Target(initialTarget)) {
+    try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
+    try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
+  }
   // Rewire on each navigation start to ensure exactly one active listener.
   mainWindow.webContents.on('did-start-navigation', () => {
     try { refreshDidStopLoadingHandler(mainWindow.webContents); } catch {}
-    try { attachVWResize(mainWindow); } catch {}
+    // Re-attach width/resize only for m365 pages
+    try {
+      const url = mainWindow.webContents.getURL();
+      if (String(url).includes('m365.cloud.microsoft')) attachVWResize(mainWindow);
+    } catch {}
   });
+  // Keep overlay and title suffix resilient across navigations
+  mainWindow.webContents.on('dom-ready', () => {
+    try {
+      const url = mainWindow.webContents.getURL();
+      const target = String(url).includes('copilot.microsoft.com') ? 'internet' : 'm365';
+      applyTitleSuffix(mainWindow, target);
+      injectStatusOverlay(mainWindow, target, true);
+    } catch {}
+   });
   mainWindow.webContents.on('destroyed', () => {
     try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading); } catch {}
   });
@@ -1669,6 +1800,24 @@ function createWindow() {
   // Quick keyboard passthrough for Esc to clear highlights even without menu activation
   
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    // --- New: keyboard shortcuts for target switching & overlay toggle ---
+    if (input.type === 'keyDown' && input.control && input.shift) {
+      if (input.key.toUpperCase() === 'W') {
+        event.preventDefault();
+        setTarget('internet'); // Internet Copilot
+        return;
+      }
+      if (input.key.toUpperCase() === 'K') {
+        event.preventDefault();
+        setTarget('m365'); // Microsoft 365 Copilot
+        return;
+      }
+      if (input.key.toUpperCase() === 'O') {
+        event.preventDefault();
+        try { mainWindow.webContents.executeJavaScript('(function(){var f=window.__copilot_set_overlay; if(typeof f!==\"function\") return; var cur=!!window.__copilot_overlay_visible; f(!cur);})();'); } catch {}
+        return;
+      }
+    }
     if (input.type === 'keyDown' && input.control && input.alt) {
       if (input.key === '=' || input.key === '+') {
         event.preventDefault();
@@ -1751,6 +1900,16 @@ function createTray() {
     {
       label: 'Hide',
       click: () => { if (mainWindow) mainWindow.hide(); }
+    },
+    { type: 'separator' },
+    // --- New: quick target switchers ---
+    {
+      label: 'Open Internet Copilot',
+      click: () => setTarget('internet')
+    },
+    {
+      label: 'Open Microsoft 365 Copilot',
+      click: () => setTarget('m365')
     },
     { type: 'separator' },
 
