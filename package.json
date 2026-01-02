@@ -52,7 +52,7 @@
     "name": "Name",
     "email": "name@mail.com"
   },
-  "license": "ISC",
+  "license": "BSD 3-Clause License",
   "devDependencies": {
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12"
