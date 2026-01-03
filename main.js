@@ -263,6 +263,12 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       html, body { overflow-x: clip !important; }
     }
 
+    /* #officehome-scroll-container must NOT scroll */
+    #officehome-scroll-container {
+      overflow: visible !important;        /* or overflow: hidden; if content must clip */
+      overscroll-behavior: contain !important;   /* avoid nested scroll chaining */
+    }
+
     /* Neutral wrappers: full width, no clamp */
     main, #root, #app,
     .container, .wrapper, [class*="container"], [class*="wrapper"],
