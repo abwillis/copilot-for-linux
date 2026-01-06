@@ -1262,6 +1262,34 @@ async function promptSaveChatPane(win) {
   }
 }
 
+// --- New helper: save whole chat pane as Markdown ---
+async function saveChatPaneAsMarkdown(win, filePath) {
+  if (!win) return;
+  try {
+    const result = await win.webContents.executeJavaScript(`
+      (function() {
+        const el = document.querySelector('${CHAT_SELECTOR}');
+        if (!el) return { ok:false, html:'', title: document.title };
+        // Use innerHTML to avoid duplicating outer container wrappers
+        return { ok:true, html: el.innerHTML, title: document.title };
+      })();
+    `);
+    if (!result?.ok) {
+      try { dialog.showErrorBox('Save Chat Pane as Markdown', 'Chat pane not found.'); } catch {}
+      return;
+    }
+    // Convert pane HTML → Markdown using your sanitizer & converter
+    const paneHtml = String(result.html || '');
+    // Decode entities first to operate on real tags, then sanitize
+    const safeHtml = stripExecutableBlocks(decodeEntities(paneHtml));
+    const md = htmlToMarkdown(safeHtml);
+    await fs.promises.writeFile(filePath, md, 'utf8');
+  } catch (err) {
+    console.error('Save Chat Pane as Markdown failed:', err);
+    try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
+  }
+}
+
 async function saveChatPaneAsText(win, filePath) {
   if (!win) return;
   try {
@@ -1290,6 +1318,11 @@ async function saveChatPaneAsText(win, filePath) {
     console.error('Save Chat Pane as Text failed:', err);
     try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
   }
+}
+
+async function saveChatAsPDF(win, filePath) {
+  const pdf = await win.webContents.printToPDF({ printBackground: true, marginsType: 1 });
+  await fs.promises.writeFile(filePath, pdf);
 }
 
 // ---------- File menu (Save / Save As…) ----------
