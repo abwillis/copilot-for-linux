@@ -476,6 +476,11 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       word-break: break-word !important;
     }
 
+  [data-testid="chat-history-search-input"] {
+      width: 2000ch !important;
+      max-width: 100% !important;
+  }
+
   [class*="tooltip" i],
   [class*="fui-Tab__content"] {
   display: inline-block !important;   /* Allows width to fit content */
