@@ -332,7 +332,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       place-self: start !important;
       /* ensure they take full available width within container clamp */
       width: 100% !important;
-      max-width: auto !important;
+      max-width: none !important;
       box-sizing: border-box !important;
       /* neutralize common layout shifters */
       left: auto !important;
@@ -490,13 +490,12 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     margin: 0 !important;               /* Optional: remove extra space */
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
-}
+   }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
     ${SELECTORS.feedContainer} table {
       table-layout: auto !important;
       width: 100% !important;
-    }
     }
   `;
 }

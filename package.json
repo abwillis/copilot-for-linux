@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.8.8",
+  "version": "1.8.10",
   "description": "Copilot for Linux",
   "main": "main.js",
   "scripts": {
@@ -16,13 +16,17 @@
     "files": [
       "**/*"
     ],
-    "asarUnpack": ["assets/*.png"],
+    "asarUnpack": [
+      "assets/*.png"
+    ],
     "linux": {
       "executableName": "copilot-for-linux",
       "target": [
         {
           "target": "rpm",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Utility",
@@ -56,6 +60,8 @@
   "devDependencies": {
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "npm": "^11.7.0"
   }
 }
-
