@@ -146,9 +146,9 @@ const IGNORE_SELECTORS = [
   `[class*="floatingToolbar" i]` ,
   `[class*="flyout" i]` ,
   `[class*="contextualMenu" i]` ,
-  `[class*="usermessage" i] ` ,
+  `[class*="usermessage" i]` ,
   `[id*="user-message"]` ,
-  `[class*="actionsContainer"]`
+  `[class*="actionsContainer"]` 
 ];
 const IGNORE_JOINED = IGNORE_SELECTORS.join(', ');
 
@@ -477,19 +477,19 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     }
 
   [data-testid="chat-history-search-input"] {
-      width: 2000ch !important;
-      max-width: 100% !important;
+    width: 2000ch !important;
+    max-width: 100% !important;
   }
 
   [class*="tooltip" i],
   [class*="fui-Tab__content"] {
-  display: inline-block !important;   /* Allows width to fit content */
-  width: fit-content !important;      /* Shrinks to text width */
-  height: fit-content !important;     /* Shrinks to text height */
-  padding: 0 !important;              /* Optional: remove extra space */
-  margin: 0 !important;               /* Optional: remove extra space */
-      overflow-wrap: anywhere !important;
-      word-break: break-word !important;
+    display: inline-block !important;   /* Allows width to fit content */
+    width: fit-content !important;      /* Shrinks to text width */
+    height: fit-content !important;     /* Shrinks to text height */
+    padding: 0 !important;              /* Optional: remove extra space */
+    margin: 0 !important;               /* Optional: remove extra space */
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
 }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
