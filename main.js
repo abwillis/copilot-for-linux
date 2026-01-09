@@ -492,6 +492,23 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     word-break: break-word !important;
    }
 
+  [class*="UserMessage"]:not([class*="UserMessage_actionBar"]), [data-testid="chatQuestion"], [data-testid*="UserMessage"]:not([class*="UserMessage_actionBar"]) {
+    max-width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
+    width: auto !important;
+    box-sizing: content-box !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    padding-left: auto !important;
+    padding-right: 0 !important;
+    align-self: flex-end !important;
+    justify-self: end !important;
+    place-self: end !importan
+    display: block !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    white-space: normal !important;
+  }
+
     /* Tables: auto layout & full width to reduce clipping overflow */
     ${SELECTORS.feedContainer} table {
       table-layout: auto !important;
