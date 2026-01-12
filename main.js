@@ -291,7 +291,6 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       word-break: break-word !important;
     }
 
-
     /* Main chat/message containers: always full width, never clipped */
     [class*="CopilotChat"],
     [data-testid="layout-main-pane"],
@@ -492,7 +491,8 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     word-break: break-word !important;
    }
 
-  [class*="UserMessage"]:not([class*="UserMessage_actionBar"]), [data-testid="chatQuestion"], [data-testid*="UserMessage"]:not([class*="UserMessage_actionBar"]) {
+  [class*="UserMessage"]:not([class*="UserMessage_actionBar"]),
+  [data-testid="chatQuestion"], [data-testid*="UserMessage"]:not([class*="UserMessage_actionBar"]) {
     max-width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
     width: auto !important;
     box-sizing: content-box !important;
@@ -507,32 +507,6 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
     white-space: normal !important;
-  }
-
-  [data-testid="capability-picker-popover"] {
-    display: block !important;
-    width: auto !important;
-    max-width: 100% !important;
-    padding-left: 25% !important;
-    margin-inline: auto !important;  
-    margin-left: auto !important;
-    margin-right: auto !important;
-    align-self: center !important;
-    justify-self: center !important;
-    place-self: center !important
-  }
-
-  [data-testid="PlusMenuPopover"] {
-    display: block !important;
-    width: auto !important;
-    max-width: 100% !important;
-    padding-left: 20% !important;
-    margin-inline: auto !important;  
-    margin-left: auto !important;
-    margin-right: auto !important;
-    align-self: center !important;
-    justify-self: center !important;
-    place-self: center !important
   }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
