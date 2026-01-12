@@ -710,7 +710,7 @@ function getRuntimeInfo() {
     detail:
       `Version: ${appVersion}\n` +
       `Node: ${nodeVersion}\n` +
-      `V8: ${v8Version}` +
+      `V8: ${v8Version}\n` +
       `Electron: ${electronVersion}\n` +
       `Chromium: ${chromeVersion}\n`
   };
