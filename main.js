@@ -502,11 +502,37 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     padding-right: 0 !important;
     align-self: flex-end !important;
     justify-self: end !important;
-    place-self: end !importan
+    place-self: end !important;
     display: block !important;
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
     white-space: normal !important;
+  }
+
+  [data-testid="capability-picker-popover"] {
+    display: block !important;
+    width: auto !important;
+    max-width: 100% !important;
+    padding-left: 25% !important;
+    margin-inline: auto !important;  
+    margin-left: auto !important;
+    margin-right: auto !important;
+    align-self: center !important;
+    justify-self: center !important;
+    place-self: center !important
+  }
+
+  [data-testid="PlusMenuPopover"] {
+    display: block !important;
+    width: auto !important;
+    max-width: 100% !important;
+    padding-left: 20% !important;
+    margin-inline: auto !important;  
+    margin-left: auto !important;
+    margin-right: auto !important;
+    align-self: center !important;
+    justify-self: center !important;
+    place-self: center !important
   }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
