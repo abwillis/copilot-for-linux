@@ -315,6 +315,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       max-width: none !important;
       margin: initial !important;
       padding: initial !important;
+      padding-left: 1px !important;
     }
 
     ${SELECTORS.llmChatMessageClass},
