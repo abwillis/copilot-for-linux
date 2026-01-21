@@ -1602,16 +1602,9 @@ function createWindow() {
 
   try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
   try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
-//  try { applyMaxLayoutJS(mainWindow); } catch (e) { console.error('applyMaxLayoutJS (outer) failed:', e); }
-//  try { enforceNoHScroll(mainWindow); } catch (e) { console.error('enforceNoHScroll failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
   try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
   try { installPasteNormalizer(mainWindow); } catch (e) { console.error('installPasteNormalizer failed:', e); }  // normalize line endings on paste
-
-//  try { enforceVisibleSelectionInShadows(mainWindow); } catch (e) { console.error('selection shadow inject failed:', e); }
-//  try { installSelectionOverlay(mainWindow); } catch (e) { console.error('installSelectionOverlay failed:', e); }
-   // Fallback (no-op if Custom Highlight API exists)
-//  try { installSelectionFallback(mainWindow); } catch (e) { console.error('installSelectionFallback failed:', e); }
 
   // Build native context menu purely from main, based on Chromium's params
 
