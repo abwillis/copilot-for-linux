@@ -1,11 +1,12 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.10.3",
+  "version": "1.10.4",
   "description": "Copilot for Linux",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --linux rpm"
+    "dist": "electron-builder --linux rpm",
+    "dist:win": "electron-builder --win nsis portable"
   },
   "build": {
     "appId": "com.company.copilot",
@@ -17,7 +18,8 @@
       "**/*"
     ],
     "asarUnpack": [
-      "assets/*.png"
+	  "**/*.node", "vendor/**", "resources/**",
+      "assets/*.png", "assets/*.ico"
     ],
     "linux": {
       "executableName": "copilot-for-linux",
@@ -49,7 +51,36 @@
     "rpm": {
       "artifactName": "${name}-${version}.${arch}.rpm",
       "compression": "bzip2"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "cscLink": "C:/apps/certs/my_code_sign.pfx",
+      "cscKeyPassword": "WhatsnextforYou",
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}-${version}-Windows-${arch}.${ext}"
+    },
+
+    "nsis": {
+      "oneClick": true,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "copilot-for-linux",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerSidebar": null,
+      "uninstallerSidebar": null
+    },
+
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable-${arch}.${ext}"
     }
+
   },
   "homepage": "https://yourwebsite.com",
   "author": {
@@ -65,3 +96,4 @@
     "npm": "^11.7.0"
   }
 }
+
