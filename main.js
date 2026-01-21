@@ -205,96 +205,6 @@ function attachVWResize(win) {
   run();
 }
 
-// Normalize line endings on paste: \r\n → \n, lone \r → \n
-function installPasteNormalizer(win) {
-  if (!win || !win.webContents) return;
-  const wc = win.webContents;
-
-  const script = String.raw`
-    (function () {
-      try {
-        // Convert any CRLF or CR to LF
-        const normalize = (s) => String(s || '')
-          .replace(/\r\n/g, '\n')
-          .replace(/\r/g, '\n');
-
-        function onPaste(e) {
-          // Only handle text payloads; leave files/images/etc. alone
-          if (!e || !e.clipboardData) return;
-          const raw = e.clipboardData.getData('text');
-          if (!raw) return;
-
-          const normalized = normalize(raw);
-          // If nothing changed, let the default paste proceed
-          if (normalized === raw) return;
-
-          // Stop the default (which would insert wrong line endings)
-          e.preventDefault();
-
-          const target = e.target;
-
-          // Case A: text input/textarea with selectionStart/End support
-          if (target && typeof target.value === 'string' && !target.isContentEditable) {
-            const start = target.selectionStart ?? null;
-            const end   = target.selectionEnd   ?? null;
-
-            if (start != null && end != null) {
-              const before = target.value.slice(0, start);
-              const after  = target.value.slice(end);
-              target.value = before + normalized + after;
-
-              // Restore caret after inserted text
-              const pos = start + normalized.length;
-              try {
-                target.selectionStart = pos;
-                target.selectionEnd   = pos;
-              } catch {}
-
-              // Notify frameworks (React, etc.)
-              try {
-                target.dispatchEvent(new Event('input', { bubbles: true }));
-              } catch {}
-              return;
-            }
-          }
-
-          // Case B: contentEditable or general fallback
-          // execCommand is widely supported for this purpose in Chromium
-          try {
-            document.execCommand('insertText', false, normalized);
-          } catch {
-            // Final fallback: replace current selection range
-            const sel = window.getSelection && window.getSelection();
-            if (sel && sel.rangeCount) {
-              const range = sel.getRangeAt(0);
-              range.deleteContents();
-              range.insertNode(document.createTextNode(normalized));
-              // Move caret to end of inserted text
-              range.collapse(false);
-              sel.removeAllRanges();
-              sel.addRange(range);
-            }
-          }
-        }
-
-        // Use capture=true so we run before app handlers; minimal overhead
-        window.addEventListener('paste', onPaste, true);
-      } catch {}
-    })();
-  `;
-
-  const run = () => { try { wc.executeJavaScript(script).catch(() => {}); } catch {} };
-
-  // Re-inject on typical SPA lifecycle events
-  wc.on('dom-ready', run);
-  wc.on('did-frame-finish-load', run);
-  wc.on('did-navigate-in-page', run);
-  wc.on('did-finish-load', run);
-
-  // Initial injection
-  run();
-}
-
 // --- Dynamic width constants (added) ---
 const MAX_CHARS = 1024;
 const VW_SIZE = 100;
@@ -1604,7 +1514,6 @@ function createWindow() {
   try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
   try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
-  try { installPasteNormalizer(mainWindow); } catch (e) { console.error('installPasteNormalizer failed:', e); }  // normalize line endings on paste
 
   // Build native context menu purely from main, based on Chromium's params
 
@@ -1613,7 +1522,6 @@ function createWindow() {
   mainWindow.webContents.on('did-start-navigation', () => {
     try { refreshDidStopLoadingHandler(mainWindow.webContents); } catch {}
     try { attachVWResize(mainWindow); } catch {}
-    try { installPasteNormalizer(mainWindow); } catch {}   // ✅ Re-assert paste normalizer
   });
   mainWindow.webContents.on('destroyed', () => {
     try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading); } catch {}
