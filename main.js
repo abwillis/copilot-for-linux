@@ -597,7 +597,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
     display: block !important;
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
-    white-space: normal !important;
+    white-space: pre-wrap !important;
   }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
