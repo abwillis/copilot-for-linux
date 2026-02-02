@@ -27,6 +27,7 @@ npm run start
 ## Build
 ```bash
 npm run dist (only rpm builds currently)
+npm run dist:win (added Windows build option)
 ```
 
 ## Dependencies
