@@ -18,8 +18,11 @@
       "**/*"
     ],
     "asarUnpack": [
-	  "**/*.node", "vendor/**", "resources/**",
-      "assets/*.png", "assets/*.ico"
+      "**/*.node",
+      "vendor/**",
+      "resources/**",
+      "assets/*.png",
+      "assets/*.ico"
     ],
     "linux": {
       "executableName": "copilot-for-linux",
@@ -62,7 +65,6 @@
       "icon": "assets/icon.ico",
       "artifactName": "${productName}-${version}-Windows-${arch}.${ext}"
     },
-
     "nsis": {
       "oneClick": true,
       "perMachine": true,
@@ -76,11 +78,9 @@
       "installerSidebar": null,
       "uninstallerSidebar": null
     },
-
     "portable": {
       "artifactName": "${productName}-${version}-Portable-${arch}.${ext}"
     }
-
   },
   "homepage": "https://yourwebsite.com",
   "author": {
@@ -89,11 +89,10 @@
   },
   "license": "BSD 3-Clause License",
   "devDependencies": {
-    "electron": "^39.2.7",
+    "electron": "^40.1.0",
     "electron-builder": "^26.4.0"
   },
   "dependencies": {
     "npm": "^11.7.0"
   }
 }
-
