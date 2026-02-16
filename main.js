@@ -730,6 +730,33 @@ function openFindModal(parent) {
     // Enable Node only in the modal; main window remains sandboxed
     webPreferences: { nodeIntegration: true, contextIsolation: false }
   });
+
+  // --- Position the find window relative to the parent window (Cinnamon-friendly) ---
+  try {
+    // Prefer the *restored* bounds if parent is maximized/fullscreen
+    const pb = (parent && typeof parent.getNormalBounds === 'function')
+      ? parent.getNormalBounds()
+      : parent.getBounds();
+
+    const modalW = 380;
+    const modalH = 160;
+
+    // Center over parent
+    let x = Math.round(pb.x + (pb.width - modalW) / 2);
+    let y = Math.round(pb.y + (pb.height - modalH) / 2);
+
+    // Clamp to nearest display workArea so it doesn't end up off-screen
+    const display = screen.getDisplayMatching({ x: pb.x, y: pb.y, width: pb.width, height: pb.height });
+    const wa = display?.workArea || { x: 0, y: 0, width: 1920, height: 1080 };
+
+    x = Math.max(wa.x, Math.min(x, wa.x + wa.width - modalW));
+    y = Math.max(wa.y, Math.min(y, wa.y + wa.height - modalH));
+
+    findModal.setBounds({ x, y, width: modalW, height: modalH });
+  } catch (e) {
+    // If anything goes wrong, let the WM decide placement
+  }
+
   // Build plain HTML, then encode only the payload for the data URL
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
