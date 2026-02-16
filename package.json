@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.10.5",
+  "version": "1.10.6",
   "description": "Copilot for Linux",
   "main": "main.js",
   "scripts": {
@@ -22,7 +22,7 @@
       "vendor/**",
       "resources/**",
       "assets/*.png",
-      "assets/*.ico"
+      "assets/win/*.ico"
     ],
     "linux": {
       "executableName": "copilot-for-linux",
@@ -62,7 +62,7 @@
       ],
       "cscLink": "C:/apps/certs/my_code_sign.pfx",
       "cscKeyPassword": "WhatsnextforYou",
-      "icon": "assets/icon.ico",
+      "icon": "assets/win/icon.ico",
       "artifactName": "${productName}-${version}-Windows-${arch}.${ext}"
     },
     "nsis": {
@@ -73,8 +73,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "copilot-for-linux",
       "deleteAppDataOnUninstall": false,
-      "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico",
+      "installerIcon": "assets/win/icon.ico",
+      "uninstallerIcon": "assets/win/icon.ico",
       "installerSidebar": null,
       "uninstallerSidebar": null
     },
