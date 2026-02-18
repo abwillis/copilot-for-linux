@@ -4,12 +4,53 @@ const path = require('path');
 const fs = require('fs');
 
 let mainWindow = null;
+let quickChatWindows = [];         // Multi-Quick Chat windows
+let activeQuickChatId = null;      // last-focused quick window id
+let quickChatIdCounter = 0;
 let tray = null;
 let isQuitting = false;
 let lastSavePath = null;  // (legacy) Remember where "Save" last wrote to (per session/window)
 let findModal = null;  // === Find modal ===
 let appIconImage = null;  // Cached icon images
 let trayImage24 = null;  // Cached icon images
+
+
+// --- Quick Chat / IPC constants --------------------------------------------
+const COPILOT_URL = 'https://m365.cloud.microsoft/chat';
+
+const IPC = Object.freeze({
+  SEND_SELECTION: 'copilot:send-selection',
+  INJECT_ENVELOPE: 'copilot:inject-envelope',
+  QUICK_NEW: 'copilot:quick-new',
+});
+
+const SEND_MODE = Object.freeze({
+  PLAIN: 'plain',
+  QUOTE: 'quote',
+});
+
+function normalizeSendOptions(opts) {
+  const o = (opts && typeof opts === 'object') ? opts : {};
+  return {
+    mode: (o.mode === SEND_MODE.QUOTE) ? SEND_MODE.QUOTE : SEND_MODE.PLAIN,
+    autoSubmit: !!o.autoSubmit,
+    targetQuickId: (typeof o.targetQuickId === 'number' && Number.isFinite(o.targetQuickId)) ? o.targetQuickId : null,
+  };
+}
+
+function quoteify(text) {
+  return String(text ?? '')
+    .split('\n')
+    .map(line => `> ${line}`)
+    .join('\n');
+}
+
+function setRoleTitle(win, role, id) {
+  try {
+    if (role === 'main') win.setTitle('Copilot — Main Chat');
+    else win.setTitle(`Copilot — Quick Chat ${id}`);
+  } catch {}
+}
 
   // Unified reveal helper to avoid repeated show/focus chains
   function reveal(win) {
@@ -19,6 +60,151 @@ let trayImage24 = null;  // Cached icon images
     win.focus();
     try { win.moveTop(); } catch {}
   }
+
+// ============================================================================
+// Multi-Quick Chat window management + send-to-specific-#N helpers
+// ============================================================================
+function getQuickById(id) {
+  return quickChatWindows.find(w => w && !w.isDestroyed() && w.__quickId === id) || null;
+}
+
+function listQuickIds() {
+  return quickChatWindows
+    .filter(w => w && !w.isDestroyed() && typeof w.__quickId === 'number')
+    .map(w => w.__quickId)
+    .sort((a, b) => a - b);
+}
+
+function getActiveQuickChatWindow({ createIfMissing = true } = {}) {
+  const active = activeQuickChatId ? getQuickById(activeQuickChatId) : null;
+  if (active) return active;
+  const any = quickChatWindows.find(w => w && !w.isDestroyed());
+  if (any) return any;
+  if (!createIfMissing) return null;
+  return createQuickChatWindow();
+}
+
+function getTargetQuickWindow(targetQuickId, { createIfMissing = true } = {}) {
+  if (typeof targetQuickId === 'number') {
+    const exact = getQuickById(targetQuickId);
+    if (exact) return exact;
+    return getActiveQuickChatWindow({ createIfMissing });
+  }
+  return getActiveQuickChatWindow({ createIfMissing });
+}
+
+function registerQuickWindow(win) {
+  if (!win) return;
+  quickChatWindows = quickChatWindows.filter(w => w && !w.isDestroyed());
+  if (!quickChatWindows.includes(win)) quickChatWindows.push(win);
+}
+
+function onQuickFocus(win) {
+  try { activeQuickChatId = win.__quickId || null; } catch {}
+}
+
+function onQuickClosed(win) {
+  quickChatWindows = quickChatWindows.filter(w => w && w !== win && !w.isDestroyed());
+  if (activeQuickChatId && win && win.__quickId === activeQuickChatId) {
+    activeQuickChatId = quickChatWindows.at(-1)?.__quickId || null;
+  }
+}
+
+async function chooseQuickChatTargetDialog(parentWin) {
+  const ids = listQuickIds();
+  const buttons = ids.map(id => `Quick Chat ${id}`);
+  buttons.push('New Quick Chat…');
+  buttons.push('Cancel');
+
+  const res = await dialog.showMessageBox(parentWin || mainWindow, {
+    type: 'question',
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    title: 'Send to Quick Chat',
+    message: 'Choose a Quick Chat target window:',
+    noLink: true
+  });
+
+  if (res.response === buttons.length - 1) return null;
+  if (res.response === buttons.length - 2) return createQuickChatWindow();
+  const chosenId = ids[res.response];
+  return getQuickById(chosenId);
+}
+
+function createQuickChatWindow() {
+  quickChatIdCounter += 1;
+  const id = quickChatIdCounter;
+  const boundsKey = `quick-${id}`;
+  const initialBounds = getInitialWindowBounds(boundsKey);
+
+  const win = new BrowserWindow({
+    skipTaskbar: false,
+    width: initialBounds.width,
+    height: initialBounds.height,
+    x: typeof initialBounds.x === 'number' ? initialBounds.x : undefined,
+    y: typeof initialBounds.y === 'number' ? initialBounds.y : undefined,
+    show: false,
+    title: `Copilot — Quick Chat ${id}`,
+    icon: appIconImage,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+      devTools: true,
+      backgroundThrottling: true,
+      spellcheck: false
+    },
+    type: 'normal',
+    autoHideMenuBar: false
+  });
+
+  win.__copilotRole = 'quick';
+  win.__quickId = id;
+  win.__boundsKey = boundsKey;
+  setRoleTitle(win, 'quick', id);
+  registerQuickWindow(win);
+  activeQuickChatId = id;
+
+  win.setMenuBarVisibility(true);
+
+  win.on('close', (e) => {
+    try { scheduleSaveWindowState(win, boundsKey); } catch {}
+    if (!isQuitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
+
+  win.on('focus', () => onQuickFocus(win));
+  win.on('closed', () => onQuickClosed(win));
+  win.on('resize', () => scheduleSaveWindowState(win, boundsKey));
+  win.on('move', () => scheduleSaveWindowState(win, boundsKey));
+
+  refreshDidStopLoadingHandler(win.webContents);
+  win.loadURL(COPILOT_URL);
+
+  win.once('ready-to-show', () => {
+    reveal(win);
+    try { applyDynamicWidth(win); } catch {}
+    try { applyMaxLayoutCSS(win); } catch {}
+    try { attachVWResize(win); } catch {}
+    try { requestExpandedLayout(win); } catch {}
+  });
+
+  win.webContents.on('did-start-navigation', () => {
+    try { refreshDidStopLoadingHandler(win.webContents); } catch {}
+    try { attachVWResize(win); } catch {}
+  });
+
+  win.webContents.setWindowOpenHandler(({ url }) => (
+    shell.openExternal(url),
+    { action: 'deny' }
+  ));
+
+  return win;
+}
+
 
 // --- Make the site use the full viewport by injecting CSS (CSP-safe) ---
 const CHAT_SELECTOR = '#mainChat';  // Root container for the chat UI
@@ -593,16 +779,25 @@ function requestExpandedLayout(win) {
 }
 
 // === Window state persistence (size/position) ===
-const WINDOW_STATE_FILE = path.join(app.getPath('userData'), 'window-state.json');
-let mainWindowState = null;
-let saveStateDebounce = null;
+function getWindowStateFile(key) {
+  const safe = String(key || 'main')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return path.join(app.getPath('userData'), `window-state-${safe}.json`);
+}
+
+const windowStateCache = new Map(); // key -> {x,y,width,height}
+const saveStateDebounceByKey = new Map(); // key -> timeoutId
 const SAVE_STATE_DEBOUNCE_MS = 20;
 
-function loadWindowState() {
+function loadWindowState(key = 'main') {
   try {
-    const raw = fs.readFileSync(WINDOW_STATE_FILE, 'utf8');
+    const file = getWindowStateFile(key);
+    const raw = fs.readFileSync(file, 'utf8');
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
+    windowStateCache.set(key, parsed);
     return parsed;
   } catch {
     return null;
@@ -614,7 +809,6 @@ function isBoundsOnAnyDisplay(bounds) {
     const rect = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
     const disp = screen.getDisplayMatching(rect);
     if (!disp) return false;
-    // Require some intersection with the display workArea
     const wa = disp.workArea;
     const intersects =
       rect.x < (wa.x + wa.width) &&
@@ -623,47 +817,46 @@ function isBoundsOnAnyDisplay(bounds) {
       (rect.y + rect.height) > wa.y;
     return intersects;
   } catch {
-    return true; // fail open; Electron will clamp later
+    return true;
   }
 }
 
-function getInitialWindowBounds() {
-  // Try previously persisted bounds
-  const persisted = loadWindowState();
+function getInitialWindowBounds(key = 'main') {
+  const persisted = windowStateCache.get(key) || loadWindowState(key);
   if (persisted && persisted.width && persisted.height) {
-    // Validate that the bounds are on a visible display; if not, ignore position
     if (isBoundsOnAnyDisplay(persisted)) {
       return {
-        width: Math.max(600, persisted.width),   // minimum reasonable size
+        width: Math.max(600, persisted.width),
         height: Math.max(400, persisted.height),
         x: typeof persisted.x === 'number' ? persisted.x : undefined,
         y: typeof persisted.y === 'number' ? persisted.y : undefined
       };
     }
-    // If position invalid, keep size but let OS pick position
     return {
       width: Math.max(600, persisted.width),
       height: Math.max(400, persisted.height)
     };
   }
-  // Fallback defaults (your current values)
   return { width: 1200, height: 800 };
 }
 
-function scheduleSaveWindowState(win) {
-  if (saveStateDebounce) clearTimeout(saveStateDebounce);
-  saveStateDebounce = setTimeout(() => {
+function scheduleSaveWindowState(win, key = 'main') {
+  const prev = saveStateDebounceByKey.get(key);
+  if (prev) clearTimeout(prev);
+  const t = setTimeout(() => {
     try {
       if (!win || win.isDestroyed()) return;
       const bounds = win.getBounds();
       const state = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
-      fs.mkdirSync(path.dirname(WINDOW_STATE_FILE), { recursive: true });
-      fs.writeFileSync(WINDOW_STATE_FILE, JSON.stringify(state), 'utf8');
-      mainWindowState = state;
+      const file = getWindowStateFile(key);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(state), 'utf8');
+      windowStateCache.set(key, state);
     } catch (err) {
       console.error('Failed to persist window state:', err);
     }
   }, SAVE_STATE_DEBOUNCE_MS);
+  saveStateDebounceByKey.set(key, t);
 }
 
 // === Helper: runtime info for About dialog ===
@@ -853,8 +1046,40 @@ function appendEditItems(editSubmenu) {
       click: () => { const wc = getWC(); if (!wc) return; wc.stopFindInPage('clearSelection'); }
     },
     { type: 'separator' },
-    {
-      label: 'Select Chat Pane',
+ {
+  label: 'New Quick Chat Window',
+  accelerator: 'Ctrl+Alt+N',
+  click: () => { try { reveal(createQuickChatWindow()); } catch (e) { console.error('New Quick Chat failed:', e); } }
+ },
+ {
+  label: 'Show Active Quick Chat',
+  accelerator: 'Ctrl+Alt+2',
+  click: () => { try { const w = getActiveQuickChatWindow({ createIfMissing: true }); if (w) reveal(w); } catch (e) { console.error('Show Quick Chat failed:', e); } }
+ },
+ { type: 'separator' },
+ {
+  label: 'Send Selection to Active Quick Chat',
+  accelerator: 'Ctrl+Alt+Q',
+  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.PLAIN, autoSubmit: false, targetQuickId: null }); }
+ },
+ {
+  label: 'Send Selection as Quote (Active Quick)',
+  accelerator: 'Ctrl+Alt+Shift+Q',
+  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.QUOTE, autoSubmit: false, targetQuickId: null }); }
+ },
+ {
+  label: 'Send Selection & Auto‑Submit (Active Quick)',
+  accelerator: 'Ctrl+Alt+Enter',
+  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.PLAIN, autoSubmit: true, targetQuickId: null }); }
+ },
+ {
+  label: 'Send Selection to Specific Quick Chat…',
+  accelerator: 'Ctrl+Alt+W',
+  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToSpecificQuickViaDialog(src, { mode: SEND_MODE.PLAIN, autoSubmit: false }); }
+ },
+ { type: 'separator' },
+ {
+  label: 'Select Chat Pane',
       accelerator: 'Ctrl+Shift+A',
       click: async () => {
         const w = BrowserWindow.getFocusedWindow() || mainWindow;
@@ -1003,6 +1228,100 @@ async function getSelectionFragment(win) {
   `).catch(() => ({ hasSelection: false, html: "", text: "" }));
   return result;
 }
+
+// ============================================================================
+// Structured selection -> envelope -> quick chat inject (active OR specific #N)
+// ============================================================================
+async function buildSelectionEnvelope(sourceWin, opts) {
+  const { mode, autoSubmit } = normalizeSendOptions(opts);
+  const src = sourceWin || mainWindow;
+  if (!src || src.isDestroyed()) return null;
+  const { hasSelection, html, text } = await getSelectionFragment(src);
+  if (!hasSelection) return null;
+
+  let content = '';
+  try {
+    content = html ? htmlToMarkdown(html) : String(text || '');
+  } catch {
+    content = String(text || '');
+  }
+
+  if (mode === SEND_MODE.QUOTE) content = quoteify(content);
+
+  const role = src.__copilotRole || (src === mainWindow ? 'main' : 'unknown');
+  const quickId = (typeof src.__quickId === 'number') ? src.__quickId : undefined;
+
+  return {
+    kind: 'inject',
+    mode,
+    content,
+    autoSubmit: !!autoSubmit,
+    meta: {
+      source: 'selection',
+      sourceRole: role,
+      sourceQuickId: quickId,
+      timestamp: Date.now(),
+      format: 'markdown'
+    }
+  };
+}
+
+async function sendSelectionToQuick(sourceWin, opts) {
+  const { targetQuickId } = normalizeSendOptions(opts);
+  const quick = getTargetQuickWindow(targetQuickId, { createIfMissing: true });
+  if (!quick || quick.isDestroyed()) return;
+
+  const envelope = await buildSelectionEnvelope(sourceWin, opts);
+  if (!envelope) return;
+
+  try { quick.webContents.send(IPC.INJECT_ENVELOPE, envelope); } catch {}
+  reveal(quick);
+}
+
+async function sendSelectionToSpecificQuickViaDialog(sourceWin, opts) {
+  const parent = BrowserWindow.getFocusedWindow() || mainWindow;
+  const target = await chooseQuickChatTargetDialog(parent);
+  if (!target) return;
+  const forced = { ...(opts || {}), targetQuickId: target.__quickId };
+  await sendSelectionToQuick(sourceWin, forced);
+}
+
+function buildSendToQuickSubmenu(sourceWin, optsBase) {
+  const ids = listQuickIds();
+  const items = [];
+
+  items.push({
+    label: 'Active Quick Chat',
+    click: async () => sendSelectionToQuick(sourceWin, { ...optsBase, targetQuickId: null })
+  });
+
+  if (ids.length) {
+    items.push({ type: 'separator' });
+    for (const id of ids) {
+      items.push({
+        label: `Quick Chat ${id}`,
+        click: async () => sendSelectionToQuick(sourceWin, { ...optsBase, targetQuickId: id })
+      });
+    }
+  }
+
+  items.push({ type: 'separator' });
+  items.push({ label: 'Choose…', click: async () => sendSelectionToSpecificQuickViaDialog(sourceWin, optsBase) });
+  items.push({ label: 'New Quick Chat Window', click: () => reveal(createQuickChatWindow()) });
+  return items;
+}
+
+ipcMain.on(IPC.SEND_SELECTION, async (event, opts) => {
+  const sender = BrowserWindow.fromWebContents(event.sender);
+  const source = (sender && sender.__copilotRole === 'main') ? sender : mainWindow;
+  try { await sendSelectionToQuick(source, opts); }
+  catch (e) { console.error('IPC send selection failed:', e); }
+});
+
+ipcMain.on(IPC.QUICK_NEW, () => {
+  try { reveal(createQuickChatWindow()); }
+  catch (e) { console.error('IPC quick new failed:', e); }
+});
 
 // Minimal HTML → Markdown converter (headings, paragraphs, lists, code, links, quotes)
 function htmlToMarkdown(html) {
@@ -1459,10 +1778,13 @@ function createWindow() {
   }
 
   // Compute initial bounds from persisted state (if any)
-  const initialBounds = getInitialWindowBounds();
+  const boundsKey = 'main';
+  // Compute initial bounds from persisted state (if any)
+  const initialBounds = getInitialWindowBounds(boundsKey);
   // Assign to the outer-scoped variable (do NOT redeclare with const here)
   mainWindow = new BrowserWindow({
-    skipTaskbar: false,
+  skipTaskbar: false,
+  title: 'Copilot — Main Chat',
     width: initialBounds.width,
     height: initialBounds.height,
     x: typeof initialBounds.x === 'number' ? initialBounds.x : undefined,
@@ -1522,8 +1844,11 @@ function createWindow() {
 
   // If you initially create hidden:
   mainWindow.once('ready-to-show', () => {
-    reveal(mainWindow);
-    augmentApplicationMenu(mainWindow);  // Augment the existing app menu with our File/Edit items
+  reveal(mainWindow);
+  try { mainWindow.__copilotRole = 'main'; } catch {}
+  try { mainWindow.__boundsKey = boundsKey; } catch {}
+  setRoleTitle(mainWindow, 'main');
+  augmentApplicationMenu(mainWindow);  // Augment the existing app menu with our File/Edit items
   });
   // Safety in case it was toggled elsewhere:
   mainWindow.setSkipTaskbar(false);
@@ -1535,7 +1860,7 @@ function createWindow() {
   // const _origOn = mainWindow.webContents.on.bind(mainWindow.webContents);
   // mainWindow.webContents.on = (evt, fn) => { if (evt === 'did-stop-loading') console.trace('[TRACE] did-stop-loading on()'); return _origOn(evt, fn); };
 
-  mainWindow.loadURL('https://m365.cloud.microsoft/chat');  // Load your app
+  mainWindow.loadURL(COPILOT_URL); // Load your app
 
   try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
   try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
@@ -1585,9 +1910,22 @@ function createWindow() {
       { role: 'paste', accelerator: 'Ctrl+V', enabled: isEditable },
       { type: 'separator' },
       { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
-      { type: 'separator' },
-      {
-        label: 'Select Chat Pane',
+ { type: 'separator' },
+ {
+  label: 'Send to Quick Chat',
+  submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.PLAIN, autoSubmit: false })
+ },
+ {
+  label: 'Send as Quote to Quick Chat',
+  submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.QUOTE, autoSubmit: false })
+ },
+ {
+  label: 'Send & Auto‑Submit to Quick Chat',
+  submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.PLAIN, autoSubmit: true })
+ },
+ { type: 'separator' },
+ {
+  label: 'Select Chat Pane',
         accelerator: 'Ctrl+Shift+A',
         enabled: true, // ✅ Always enabled regardless of selection
         click: async () => {
@@ -1768,10 +2106,10 @@ function createWindow() {
   });
 
   // Persist window state on move/resize; debounce to avoid churn
-  mainWindow.on('resize', () => scheduleSaveWindowState(mainWindow));
-  mainWindow.on('move', () => scheduleSaveWindowState(mainWindow));
+  mainWindow.on('resize', () => scheduleSaveWindowState(mainWindow, boundsKey));
+  mainWindow.on('move', () => scheduleSaveWindowState(mainWindow, boundsKey));
   // Also persist just before quit or close (in case of no recent move/resize)
-  mainWindow.on('close', () => scheduleSaveWindowState(mainWindow));
+  mainWindow.on('close', () => scheduleSaveWindowState(mainWindow, boundsKey));
 
   // Optional: hide instead of close when user closes window
   mainWindow.on('close', (e) => {
@@ -1914,6 +2252,13 @@ app.on('before-quit', () => {
         } catch {}
       })();`).catch(() => {});
     }
+  
+  // Best-effort: close quick windows on quit
+  try {
+    for (const w of quickChatWindows) {
+      try { if (w && !w.isDestroyed()) w.destroy(); } catch {}
+    }
   } catch {}
+} catch {}
 });
 
