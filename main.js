@@ -16,7 +16,7 @@ let trayImage24 = null;  // Cached icon images
 
 // --- Clipboard-based Quick Chat paste timing ---------------------------------
 // Requirement: copy selection -> open/focus Quick Chat -> wait 3s -> paste.
-const QUICK_PASTE_DELAY_MS = 3000;
+const QUICK_PASTE_DELAY_MS = 3000; // NOTE: This is now a fallback timeout only. Primary path waits for input readiness.
 const QUICK_PASTE_POST_KEY_DELAY_MS = 40; // tiny gap between paste and optional Enter
 
 
@@ -147,8 +147,69 @@ function sendEnterKeystroke(wc) {
   }
 }
 
-function scheduleQuickPaste(wc, { autoSubmit = false } = {}) {
+function delayMs(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Wait until the Copilot chat input appears and is visible.
+ * This avoids a fixed delay and pastes as soon as the UI is ready.
+ *
+ * Returns true if ready before timeout, else false.
+ */
+async function waitForChatInput(wc, timeoutMs = 4000) {
+  const start = Date.now();
+  const pollIntervalMs = 50;
+
+  // A small set of selectors to detect an input surface.
+  // The UI can change; we keep this conservative and generic.
+  const probeScript = `
+    (function () {
+      try {
+        // Common cases: textarea or contenteditable editor
+        const el =
+          document.querySelector('textarea') ||
+          document.querySelector('[contenteditable="true"]') ||
+          document.querySelector('div[role="textbox"]');
+        if (!el) return false;
+
+        // Visible-ish check: offsetParent null usually means display:none or detached.
+        // Also ensure it has a client rect (not 0x0).
+        const r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+        const visible = (el.offsetParent !== null) && r && (r.width > 0) && (r.height > 0);
+        return !!visible;
+      } catch (e) {
+        return false;
+      }
+    })();
+  `;
+
+  while ((Date.now() - start) < timeoutMs) {
+    const ok = await wc.executeJavaScript(probeScript, true).catch(() => false);
+    if (ok) return true;
+    await delayMs(pollIntervalMs);
+  }
+  return false;
+}
+
+/**
+ * Dynamic paste: wait for input readiness (up to timeout), then paste.
+ * Falls back to QUICK_PASTE_DELAY_MS if readiness isn't detected in time.
+ */
+async function scheduleQuickPaste(wc, { autoSubmit = false } = {}) {
   if (!wc) return;
+
+  // Primary: wait for UI readiness
+  const ready = await waitForChatInput(wc, 4000);
+  if (ready) {
+    const pasted = sendPasteKeystroke(wc);
+    if (autoSubmit && pasted) {
+      setTimeout(() => sendEnterKeystroke(wc), QUICK_PASTE_POST_KEY_DELAY_MS);
+    }
+    return;
+  }
+
+  // Fallback: preserve old behavior in case selectors break / UI changes
   setTimeout(() => {
     const pasted = sendPasteKeystroke(wc);
     if (autoSubmit && pasted) {
@@ -156,7 +217,6 @@ function scheduleQuickPaste(wc, { autoSubmit = false } = {}) {
     }
   }, QUICK_PASTE_DELAY_MS);
 }
-
 
 async function chooseQuickChatTargetDialog(parentWin) {
   const ids = listQuickIds();
@@ -1338,15 +1398,18 @@ async function sendSelectionToQuick(sourceWin, opts) {
 
   const wc = quick.webContents;
   try {
-    if (wc && wc.isLoading && wc.isLoading()) {
-      wc.once('did-finish-load', () => scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }));
+  if (wc && wc.isLoading && wc.isLoading()) {
+    wc.once('did-finish-load', () => {
+      // Dynamic wait + paste after load completes
+      scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
+    });
     } else {
-      scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit });
+    // Dynamic wait + paste immediately if already ready
+    scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
     }
   } catch {
-    scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit });
+    scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
   }
-
 }
 
 async function sendSelectionToSpecificQuickViaDialog(sourceWin, opts) {
