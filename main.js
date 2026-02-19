@@ -14,13 +14,17 @@ let findModal = null;  // === Find modal ===
 let appIconImage = null;  // Cached icon images
 let trayImage24 = null;  // Cached icon images
 
+// --- Clipboard-based Quick Chat paste timing ---------------------------------
+// Requirement: copy selection -> open/focus Quick Chat -> wait 3s -> paste.
+const QUICK_PASTE_DELAY_MS = 3000;
+const QUICK_PASTE_POST_KEY_DELAY_MS = 40; // tiny gap between paste and optional Enter
+
 
 // --- Quick Chat / IPC constants --------------------------------------------
 const COPILOT_URL = 'https://m365.cloud.microsoft/chat';
 
 const IPC = Object.freeze({
   SEND_SELECTION: 'copilot:send-selection',
-  INJECT_ENVELOPE: 'copilot:inject-envelope',
   QUICK_NEW: 'copilot:quick-new',
 });
 
@@ -109,6 +113,50 @@ function onQuickClosed(win) {
     activeQuickChatId = quickChatWindows.at(-1)?.__quickId || null;
   }
 }
+
+// ============================================================================
+// Clipboard paste helpers (iframe-safe)
+// ============================================================================
+function getPasteModifiers() {
+  // Cmd+V on macOS, Ctrl+V elsewhere
+  return (process.platform === 'darwin') ? ['meta'] : ['control'];
+}
+
+function sendPasteKeystroke(wc) {
+  if (!wc) return false;
+  try {
+    const mods = getPasteModifiers();
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: mods });
+    wc.sendInputEvent({ type: 'keyUp',   keyCode: 'V', modifiers: mods });
+    return true;
+  } catch (e) {
+    console.error('sendPasteKeystroke failed:', e);
+    return false;
+  }
+}
+
+function sendEnterKeystroke(wc) {
+  if (!wc) return false;
+  try {
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+    wc.sendInputEvent({ type: 'keyUp',   keyCode: 'Enter' });
+    return true;
+  } catch (e) {
+    console.error('sendEnterKeystroke failed:', e);
+    return false;
+  }
+}
+
+function scheduleQuickPaste(wc, { autoSubmit = false } = {}) {
+  if (!wc) return;
+  setTimeout(() => {
+    const pasted = sendPasteKeystroke(wc);
+    if (autoSubmit && pasted) {
+      setTimeout(() => sendEnterKeystroke(wc), QUICK_PASTE_POST_KEY_DELAY_MS);
+    }
+  }, QUICK_PASTE_DELAY_MS);
+}
+
 
 async function chooseQuickChatTargetDialog(parentWin) {
   const ids = listQuickIds();
@@ -1274,8 +1322,31 @@ async function sendSelectionToQuick(sourceWin, opts) {
   const envelope = await buildSelectionEnvelope(sourceWin, opts);
   if (!envelope) return;
 
-  try { quick.webContents.send(IPC.INJECT_ENVELOPE, envelope); } catch {}
+  // Clipboard-based path (iframe-safe):
+  // 1) Copy selection content to clipboard
+  // 2) Reveal/focus Quick Chat window
+  // 3) Wait 3 seconds
+  // 4) Paste (Ctrl/Cmd+V)
+  // 5) Optional Enter if autoSubmit
+  try {
+    clipboard.writeText(String(envelope.content || ''));
+  } catch (e) {
+    console.error('clipboard.writeText failed:', e);
+  }
+
   reveal(quick);
+
+  const wc = quick.webContents;
+  try {
+    if (wc && wc.isLoading && wc.isLoading()) {
+      wc.once('did-finish-load', () => scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }));
+    } else {
+      scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit });
+    }
+  } catch {
+    scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit });
+  }
+
 }
 
 async function sendSelectionToSpecificQuickViaDialog(sourceWin, opts) {
