@@ -305,6 +305,156 @@ function createQuickChatWindow() {
     try { attachVWResize(win); } catch {}
   });
 
+
+  // --- Right-click native context menu (same as Main Chat) ---
+  win.webContents.on('context-menu', (_event, params) => {
+    // params: { isEditable, selectionText, selectionTextIsEditable, mediaType, linkURL, inputFieldType, x, y, ... }
+    const isEditable = !!params.isEditable;
+    const hasSelection = !!params.selectionText && params.selectionText.length > 0;
+
+    // Always offer at least a minimal fallback menu so users are not left without options
+    const minimalTemplate = [
+      { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
+      { type: 'separator' },
+      {
+        label: 'Inspect Element',
+        accelerator: 'Ctrl+Shift+C',
+        click: () => {
+          try {
+            win.webContents.inspectElement(params.x, params.y);
+            if (!win.webContents.isDevToolsOpened()) {
+              win.webContents.openDevTools({ mode: 'right' });
+            }
+          } catch (err) {
+            console.error('Inspect failed:', err);
+          }
+        }
+      }
+    ];
+
+    const template = [
+      { role: 'cut', accelerator: 'Ctrl+X', enabled: isEditable },
+      { role: 'copy', accelerator: 'Ctrl+C', enabled: (hasSelection || isEditable) },
+      { role: 'paste', accelerator: 'Ctrl+V', enabled: isEditable },
+      { type: 'separator' },
+      { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
+      { type: 'separator' },
+      {
+        label: 'Send to Quick Chat',
+        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: false })
+      },
+      {
+        label: 'Send as Quote to Quick Chat',
+        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.QUOTE, autoSubmit: false })
+      },
+      {
+        label: 'Send & Auto-Submit to Quick Chat',
+        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: true })
+      },
+      { type: 'separator' },
+      {
+        label: 'Select Chat Pane',
+        accelerator: 'Ctrl+Shift+A',
+        enabled: true,
+        click: async () => {
+          try {
+            const res = await selectChatPane(win);
+            if (!res?.ok) {
+              try { dialog.showErrorBox('Select Chat Pane', 'Could not select the chat pane.'); } catch {}
+            }
+          } catch (err) {
+            console.error('Select Chat Pane failed:', err);
+            try { dialog.showErrorBox('Select Chat Pane failed', String(err?.message ?? err)); } catch {}
+          }
+        }
+      },
+      {
+        label: 'Save Chat Pane…',
+        click: async () => {
+          await promptSaveChatPane(win);
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Copy Selection as Markdown',
+        accelerator: 'Ctrl+Shift+M',
+        enabled: hasSelection,
+        click: async () => {
+          try {
+            const { hasSelection: ok, html, text } = await getSelectionFragment(win);
+            if (!ok) return;
+            const md = htmlToMarkdown(html || text);
+            clipboard.writeText(md);
+          } catch (err) {
+            console.error('Copy Selection as Markdown failed:', err);
+          }
+        }
+      },
+      {
+        label: 'Save Selection as Markdown…',
+        enabled: hasSelection,
+        click: async () => {
+          await saveSelectionAsMarkdown(win);
+        }
+      },
+      {
+        label: 'Save Selection as Plain Text…',
+        enabled: hasSelection,
+        click: async () => {
+          try {
+            const { hasSelection: ok, html, text } = await getSelectionFragment(win);
+            if (!ok) {
+              try { dialog.showErrorBox('Save Selection as Text', 'No selection found.'); } catch {}
+              return;
+            }
+            const safeHtml = stripExecutableBlocks(decodeEntities(html || text));
+            let plain = stripTags(safeHtml)
+              .replace(/[ 	]+\n/g, '\n')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+            const { filePath, canceled } = await dialog.showSaveDialog(win, {
+              title: 'Save Selection as Plain Text',
+              defaultPath: 'selection.txt',
+              filters: [{ name: 'Plain Text', extensions: ['txt'] }]
+            });
+            if (canceled || !filePath) return;
+            await fs.promises.writeFile(filePath, plain, 'utf8');
+          } catch (err) {
+            console.error('Save Selection as Plain Text failed:', err);
+            try { dialog.showErrorBox('Save failed', String(err?.message ?? err)); } catch {}
+          }
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Inspect Element',
+        accelerator: 'Ctrl+Shift+C',
+        click: () => {
+          try {
+            win.webContents.inspectElement(params.x, params.y);
+            if (!win.webContents.isDevToolsOpened()) {
+              win.webContents.openDevTools({ mode: 'right' });
+            }
+          } catch (err) {
+            console.error('Inspect failed:', err);
+          }
+        }
+      }
+    ];
+
+    let menu;
+    try {
+      menu = Menu.buildFromTemplate(template);
+    } catch (err) {
+      console.error('Context menu template error:', err);
+      menu = Menu.buildFromTemplate([{ role: 'copy', enabled: hasSelection }, { role: 'selectAll' }]);
+    }
+
+    try { menu.popup({ window: win }); }
+    catch (err) { console.error('Context menu popup failed:', err); }
+  });
+  // --- end context menu ---
+
   win.webContents.setWindowOpenHandler(({ url }) => (
     shell.openExternal(url),
     { action: 'deny' }
