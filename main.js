@@ -1,7 +1,11 @@
 // main.js
-const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// Force a persistent Chromium storage partition for Copilot.
+// Electron: partitions starting with "persist:" use a persistent session. [5](https://www.electronjs.org/docs/latest/api/session)
+const COPILOT_PARTITION = String(process.env.COPILOT_PARTITION ?? 'persist:copilot-for-linux').trim();
 
 let mainWindow = null;
 let quickChatWindows = [];         // Multi-Quick Chat windows
@@ -259,6 +263,7 @@ function createQuickChatWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      partition: COPILOT_PARTITION,
       devTools: true,
       backgroundThrottling: true,
       spellcheck: false
@@ -2080,6 +2085,7 @@ function createWindow() {
       nodeIntegration: false,      // renderer cannot use Node APIs
       contextIsolation: true,      // safer: isolates preload from page
       preload: path.join(__dirname, 'preload.js'), // optional: expose safe APIs
+      partition: COPILOT_PARTITION,
       devTools: true,
       backgroundThrottling: true,   // reduce CPU when hidden
       spellcheck: false            // disable if not required
