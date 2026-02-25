@@ -163,7 +163,7 @@ function delayMs(ms) {
  */
 async function waitForChatInput(wc, timeoutMs = 4000) {
   const start = Date.now();
-  const pollIntervalMs = 50;
+  const pollIntervalMs = 200;
 
   // A small set of selectors to detect an input surface.
   // The UI can change; we keep this conservative and generic.
