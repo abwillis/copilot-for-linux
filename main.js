@@ -294,7 +294,7 @@ function createQuickChatWindow() {
   win.on('resize', () => scheduleSaveWindowState(win, boundsKey));
   win.on('move', () => scheduleSaveWindowState(win, boundsKey));
 
-  refreshDidStopLoadingHandler(win.webContents);
+  ensureDidStopLoadingHandler(win.webContents);
   win.loadURL(COPILOT_URL);
 
   win.once('ready-to-show', () => {
@@ -306,7 +306,6 @@ function createQuickChatWindow() {
   });
 
   win.webContents.on('did-start-navigation', () => {
-    try { refreshDidStopLoadingHandler(win.webContents); } catch {}
     try { attachVWResize(win); } catch {}
   });
 
@@ -487,47 +486,11 @@ function onDidStopLoading() {
   }
 }
 
-/**
- * Remove any non-Copilot 'did-stop-loading' listeners and re-add a single instance
- * of our handler. This guarantees exactly one active handler and prevents
- * MaxListenersExceededWarning even when other code attempts to attach duplicates.
- */
-function dedupeDidStopLoadingHandlers(webContents) {
-  if (!webContents) return;
-  // Enumerate current listeners for did-stop-loading
-  const current = webContents.listeners('did-stop-loading');
-  // Remove everything that is not our named handler
-  for (const fn of current) {
-    if (fn !== onDidStopLoading) {
-      try { webContents.removeListener('did-stop-loading', fn); } catch {}
-    }
-  }
-  // Ensure our handler is attached exactly once
-  try { webContents.removeListener('did-stop-loading', onDidStopLoading); } catch {}
-  webContents.on('did-stop-loading', onDidStopLoading);
-}
-
-/**
- * Diagnostic rewire: print counts before/after, then hard-dedupe.
- * Keep the defaultMaxListeners bump only while you diagnose upstream duplicates.
- */
-function refreshDidStopLoadingHandler(webContents) {
-  if (!webContents) return;
-  try {
-    // TEMP: avoid noisy warnings during diagnosis; remove when stable.
-    const { EventEmitter } = require('events');
-    if (EventEmitter.defaultMaxListeners < 50) {
-      EventEmitter.defaultMaxListeners = 50;
-    }
-  } catch {}
-
-  const before = webContents.listenerCount('did-stop-loading');
-//  console.warn('[refreshDidStopLoadingHandler] listeners present before refresh:', before);
-
-  dedupeDidStopLoadingHandlers(webContents);
-
-  const after = webContents.listenerCount('did-stop-loading');
-//  console.warn('[refreshDidStopLoadingHandler] listeners after refresh:', after);
+// Attach the handler exactly once per webContents.
+function ensureDidStopLoadingHandler(webContents) {
+ if (!webContents) return;
+ try { webContents.removeListener('did-stop-loading', onDidStopLoading); } catch {}
+ webContents.on('did-stop-loading', onDidStopLoading);
 }
 
 // 7 options grouped into containers vs content for correct layout application
@@ -2143,9 +2106,8 @@ function createWindow() {
   // Safety in case it was toggled elsewhere:
   mainWindow.setSkipTaskbar(false);
 
-  // ✅ Attach 'did-stop-loading' once and hard-dedupe any foreign handlers.
-  // Do this immediately after the window is created (before/after loadURL is fine).
-  refreshDidStopLoadingHandler(mainWindow.webContents);
+  // Attach 'did-stop-loading' exactly once for this webContents.
+  ensureDidStopLoadingHandler(mainWindow.webContents);
   // OPTIONAL: uncomment this to trace *where* extra listeners are being added:
   // const _origOn = mainWindow.webContents.on.bind(mainWindow.webContents);
   // mainWindow.webContents.on = (evt, fn) => { if (evt === 'did-stop-loading') console.trace('[TRACE] did-stop-loading on()'); return _origOn(evt, fn); };
@@ -2160,9 +2122,7 @@ function createWindow() {
   // Build native context menu purely from main, based on Chromium's params
 
   // Keep the 'did-stop-loading' handler singular when SPA navigations occur.
-  // Rewire on each navigation start to ensure exactly one active listener.
   mainWindow.webContents.on('did-start-navigation', () => {
-    try { refreshDidStopLoadingHandler(mainWindow.webContents); } catch {}
     try { attachVWResize(mainWindow); } catch {}
   });
   mainWindow.webContents.on('destroyed', () => {
