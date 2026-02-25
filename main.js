@@ -1052,7 +1052,7 @@ function getWindowStateFile(key) {
 
 const windowStateCache = new Map(); // key -> {x,y,width,height}
 const saveStateDebounceByKey = new Map(); // key -> timeoutId
-const SAVE_STATE_DEBOUNCE_MS = 20;
+const SAVE_STATE_DEBOUNCE_MS = 500;
 
 function loadWindowState(key = 'main') {
   try {
@@ -1106,14 +1106,14 @@ function getInitialWindowBounds(key = 'main') {
 function scheduleSaveWindowState(win, key = 'main') {
   const prev = saveStateDebounceByKey.get(key);
   if (prev) clearTimeout(prev);
-  const t = setTimeout(() => {
+ const t = setTimeout(async () => {
     try {
       if (!win || win.isDestroyed()) return;
       const bounds = win.getBounds();
       const state = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
       const file = getWindowStateFile(key);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(state), 'utf8');
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, JSON.stringify(state), 'utf8');
       windowStateCache.set(key, state);
     } catch (err) {
       console.error('Failed to persist window state:', err);
