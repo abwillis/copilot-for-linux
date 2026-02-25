@@ -1478,20 +1478,72 @@ async function selectChatPane(win) {
 // ---------- Selection → Markdown helpers ----------
 // Extract the current selection from the renderer as HTML fragment and text.
 async function getSelectionFragment(win) {
-  const result = await win.webContents.executeJavaScript(`
-    (function() {
-      const sel = window.getSelection && window.getSelection();
-      if (!sel || sel.rangeCount === 0) {
-        return { hasSelection: false, html: "", text: "" };
-      }
-      const range = sel.getRangeAt(0);
-      const container = document.createElement('div');
-      container.appendChild(range.cloneContents());
-      const html = container.innerHTML;
-      const text = String(sel.toString() || '');
-      return { hasSelection: true, html, text };
-    })();
-  `).catch(() => ({ hasSelection: false, html: "", text: "" }));
+
+ const result = await win.webContents.executeJavaScript(`
+ (function() {
+  const sel = window.getSelection && window.getSelection();
+  if (!sel || sel.rangeCount === 0) {
+   return { hasSelection: false, html: "", text: "" };
+  }
+
+  // Clone selected contents so we never mutate the live DOM
+  const range = sel.getRangeAt(0);
+  const container = document.createElement('div');
+  container.appendChild(range.cloneContents());
+
+  // -------------------------------
+  // DOM CLEANUP (Copilot-specific)
+  // -------------------------------
+
+  // Known non-content UI affordances:
+  // copy buttons, feedback icons, toolbars, hover menus, references
+  const JUNK_SELECTORS = [
+   'button',
+   '[role="button"]',
+   '[data-testid*="copy"]',
+   '[data-testid*="feedback"]',
+   '[data-testid*="thumb"]',
+   '[data-testid*="reaction"]',
+   '[data-testid*="reference"]',
+   '[data-testid*="citation"]',
+   '[class*="copy" i]',
+   '[class*="feedback" i]',
+   '[class*="toolbar" i]',
+   '[class*="action" i]',
+   '[class*="hover" i]',
+   '[class*="menu" i]',
+   '[class*="icon" i]'
+  ];
+
+  container.querySelectorAll(JUNK_SELECTORS.join(',')).forEach(el => {
+   try { el.remove(); } catch {}
+  });
+
+  // Preserve semantic blocks explicitly (never strip their parents)
+  container.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
+   try { el.setAttribute('data-preserve', 'true'); } catch {}
+  });
+
+  // Remove empty wrapper nodes that add no content,
+  // but do NOT touch semantic structures
+  container.querySelectorAll('div, span').forEach(el => {
+   try {
+    if (
+     !el.textContent.trim() &&
+     !el.querySelector('[data-preserve]') &&
+     !el.querySelector('pre, code, table, ul, ol')
+    ) {
+     el.remove();
+    }
+   } catch {}
+  });
+
+  const html = container.innerHTML;
+  const text = String(sel.toString() || '');
+
+  return { hasSelection: true, html, text };
+ })();
+ `).catch(() => ({ hasSelection: false, html: "", text: "" }));
   return result;
 }
 
@@ -1658,7 +1710,7 @@ function htmlToMarkdown(html) {
   md = md.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_, c) => {
     const inner = c.replace(/<\/?code[^>]*>/gi, '');
     const clean = stripTags(inner).replace(/\r?\n/g, '\n');
-    return `\n\`\`\`\n${clean.trim()}\n\`\`\`\n`;
+    return `\n~~~\n${clean.trim()}\n~~~\n`;
   });
 
   // 10) Links (emit bare href if no text)
@@ -1675,11 +1727,15 @@ function htmlToMarkdown(html) {
   });
 
   // 12) Strip remaining tags and normalize whitespace
-  md = stripTags(md)
-       .replace(/[ \t]+\n/g, '\n')
-       .replace(/\n{3,}/g, '\n\n')
-       .trim();
+  md = stripTags(md);
 
+  // Normalize trailing whitespace only (do NOT collapse structural blank lines)
+  md = md.replace(/[ \t]+\n/g, '\n');
+
+  // Ensure at least one blank line between block elements
+  md = md.replace(/\n{4,}/g, '\n\n');
+
+  md = md.trim();
   return md;
 }
 
@@ -1926,22 +1982,84 @@ async function promptSaveChatPane(win) {
 async function saveChatPaneAsMarkdown(win, filePath) {
   if (!win) return;
   try {
-    const result = await win.webContents.executeJavaScript(`
-      (function() {
-        const el = document.querySelector('${CHAT_SELECTOR}');
-        if (!el) return { ok:false, html:'', title: document.title };
-        // Use innerHTML to avoid duplicating outer container wrappers
-        return { ok:true, html: el.innerHTML, title: document.title };
-      })();
-    `);
+   const result = await win.webContents.executeJavaScript(`
+   (function() {
+    const root = document.querySelector('${CHAT_SELECTOR}');
+    if (!root) return { ok:false, html:'', title: document.title };
+
+    // Clone so we never mutate the live DOM
+    const clone = root.cloneNode(true);
+
+    // -------------------------------
+    // DOM CLEANUP (Copilot-specific)
+    // -------------------------------
+
+    // Known non-content UI affordances:
+    // copy buttons, feedback icons, toolbars, hover menus, references
+    const JUNK_SELECTORS = [
+     'button',
+     '[role="button"]',
+     '[data-testid*="copy"]',
+     '[data-testid*="feedback"]',
+     '[data-testid*="thumb"]',
+     '[data-testid*="reaction"]',
+     '[data-testid*="reference"]',
+     '[data-testid*="citation"]',
+     '[class*="copy" i]',
+     '[class*="feedback" i]',
+     '[class*="toolbar" i]',
+     '[class*="action" i]',
+     '[class*="hover" i]',
+     '[class*="menu" i]',
+     '[class*="icon" i]'
+    ];
+
+    clone.querySelectorAll(JUNK_SELECTORS.join(',')).forEach(el => {
+     try { el.remove(); } catch {}
+    });
+
+    // Explicitly preserve semantic structures
+    clone.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
+     try { el.setAttribute('data-preserve', 'true'); } catch {}
+    });
+
+    // Remove empty wrapper nodes that add no content,
+    // but do NOT touch semantic structures
+    clone.querySelectorAll('div, span').forEach(el => {
+     try {
+      if (
+       !el.textContent.trim() &&
+       !el.querySelector('[data-preserve]') &&
+       !el.querySelector('pre, code, table, ul, ol')
+      ) {
+       el.remove();
+      }
+     } catch {}
+    });
+
+    return {
+     ok: true,
+     html: clone.innerHTML,
+     title: document.title
+    };
+   })();
+   `);
+
     if (!result?.ok) {
       try { dialog.showErrorBox('Save Chat Pane as Markdown', 'Chat pane not found.'); } catch {}
       return;
     }
-    // Convert pane HTML → Markdown using your sanitizer & converter
+
+    // Convert cleaned semantic HTML → Markdown
+    // (No entity decoding; structure already preserved)
     const paneHtml = String(result.html || '');
-    // Decode entities first to operate on real tags, then sanitize
-    const safeHtml = stripExecutableBlocks(decodeEntities(paneHtml));
+
+  // IMPORTANT:
+  // Copilot renders diff lines as separate block elements (div/span)
+  // with NO newline text nodes. Inject newlines between blocks so
+  // diffs and code retain line structure.
+  const withLineBreaks = paneHtml.replace(/></g, '>\n<');
+  const safeHtml = stripExecutableBlocks(withLineBreaks);
     const md = htmlToMarkdown(safeHtml);
     await fs.promises.writeFile(filePath, md, 'utf8');
   } catch (err) {
