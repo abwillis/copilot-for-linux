@@ -291,10 +291,20 @@ function createQuickChatWindow() {
 
   win.on('focus', () => onQuickFocus(win));
   win.on('closed', () => onQuickClosed(win));
+  win.webContents.on('destroyed', () => {
+    try {
+      win.webContents?.removeListener('did-stop-loading', onDidStopLoading);
+      delete win.webContents.__hasDidStopLoadingHandler;
+    } catch {}
+  });
   win.on('resize', () => scheduleSaveWindowState(win, boundsKey));
   win.on('move', () => scheduleSaveWindowState(win, boundsKey));
 
   ensureDidStopLoadingHandler(win.webContents);
+
+  // Allow Electron's internal executeJavaScript() listeners
+  // without triggering false-positive leak warnings
+  win.webContents.setMaxListeners(0);
   win.loadURL(COPILOT_URL);
 
   win.once('ready-to-show', () => {
@@ -489,8 +499,12 @@ function onDidStopLoading() {
 // Attach the handler exactly once per webContents.
 function ensureDidStopLoadingHandler(webContents) {
  if (!webContents) return;
- try { webContents.removeListener('did-stop-loading', onDidStopLoading); } catch {}
- webContents.on('did-stop-loading', onDidStopLoading);
+
+  // Guard against duplicate attachment across SPA navigations
+  if (webContents.__hasDidStopLoadingHandler) return;
+
+  webContents.__hasDidStopLoadingHandler = true;
+  webContents.on('did-stop-loading', onDidStopLoading);
 }
 
 // 7 options grouped into containers vs content for correct layout application
@@ -2266,6 +2280,10 @@ function createWindow() {
 
   // Attach 'did-stop-loading' exactly once for this webContents.
   ensureDidStopLoadingHandler(mainWindow.webContents);
+
+  // Electron internally attaches temporary did-stop-loading listeners
+  // during executeJavaScript(); this is expected for SPA apps.
+  mainWindow.webContents.setMaxListeners(0);
   // OPTIONAL: uncomment this to trace *where* extra listeners are being added:
   // const _origOn = mainWindow.webContents.on.bind(mainWindow.webContents);
   // mainWindow.webContents.on = (evt, fn) => { if (evt === 'did-stop-loading') console.trace('[TRACE] did-stop-loading on()'); return _origOn(evt, fn); };
@@ -2284,7 +2302,11 @@ function createWindow() {
     try { attachVWResize(mainWindow); } catch {}
   });
   mainWindow.webContents.on('destroyed', () => {
-    try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading); } catch {}
+    try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading);
+      if (mainWindow?.webContents) {
+        delete mainWindow.webContents.__hasDidStopLoadingHandler;
+      }
+    } catch {}
   });
 
   mainWindow.webContents.on('context-menu', (_event, params) => {
