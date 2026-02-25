@@ -930,6 +930,14 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
   `;
 }
 
+// ============================================================================
+// Max-layout CSS caching + injection bookkeeping (framesInSubtree variant)
+// ============================================================================
+const maxLayoutCssCache = new Map();              // cacheKey -> css string
+const injectedFrameIdsByWC = new WeakMap();       // webContents -> Set<routingId>
+const insertedMainCssKeyByWC = new WeakMap();     // webContents -> insertedCSS key (main frame)
+const cssApplyDebounceByWC = new WeakMap();       // webContents -> timeoutId
+
 // CSP-safe injection with re-inject on SPA navigations (and cleanup)
 function injectCSSOnLoad(win, css, keyHolder) {
   if (!win || !win.webContents) return;
@@ -955,13 +963,40 @@ function injectCSSIntoAllFrames(win, css) {
   const wc = win.webContents;
   const apply = () => {
     try {
-      // Iterate over the whole frame subtree (Electron 20+)
-      const frames = wc.mainFrame?.framesInSubtree ?? wc.mainFrame?.frames ?? [];
-      for (const f of frames) {
-        try { f.insertCSS(css).catch(() => {}); } catch {}
-      }
-      // Also apply to main frame explicitly (harmless if duplicated)
-      wc.insertCSS(css).catch(() => {});
+     // Debounce reinjection bursts from multiple navigation/frame events.
+     const prev = cssApplyDebounceByWC.get(wc);
+     if (prev) clearTimeout(prev);
+     const t = setTimeout(() => {
+      try {
+       // Track per-frame injections so the same frame isn't hit repeatedly.
+       let injected = injectedFrameIdsByWC.get(wc);
+       if (!injected) {
+        injected = new Set();
+        injectedFrameIdsByWC.set(wc, injected);
+       }
+
+       // Iterate over the whole frame subtree (Electron 20+)
+       const frames = wc.mainFrame?.framesInSubtree ?? wc.mainFrame?.frames ?? [];
+       for (const f of frames) {
+        try {
+         const rid = (typeof f?.routingId === 'number') ? f.routingId : null;
+         if (rid !== null && injected.has(rid)) continue;
+         // Only mark as injected after success.
+         f.insertCSS(css).then(() => { if (rid !== null) injected.add(rid); }).catch(() => {});
+        } catch {}
+       }
+
+       // Main frame injection with key tracking to avoid accumulating duplicates.
+       const prevKey = insertedMainCssKeyByWC.get(wc);
+       if (prevKey) {
+        try { wc.removeInsertedCSS(prevKey); } catch {}
+       }
+       try {
+        wc.insertCSS(css).then((k) => { insertedMainCssKeyByWC.set(wc, k); }).catch(() => {});
+       } catch {}
+      } catch {}
+     }, 150);
+     cssApplyDebounceByWC.set(wc, t);
     } catch {}
   };
   // Hook all relevant events (document + frame loads + in-page SPA nav)
@@ -974,7 +1009,12 @@ function injectCSSIntoAllFrames(win, css) {
 
 function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
   if (!win) return;
-  const css = buildMaxLayoutCSS({ specificMessageId });
+   const cacheKey = specificMessageId || 'default';
+   let css = maxLayoutCssCache.get(cacheKey);
+   if (!css) {
+    css = buildMaxLayoutCSS({ specificMessageId });
+    maxLayoutCssCache.set(cacheKey, css);
+   }
   // Apply across all frames so we catch real content surfaces inside iframes
   injectCSSIntoAllFrames(win, css);
 }
