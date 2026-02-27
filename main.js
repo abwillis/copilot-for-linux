@@ -307,10 +307,22 @@ function createQuickChatWindow() {
   win.webContents.setMaxListeners(0);
   win.loadURL(COPILOT_URL);
 
+ // Defer heavy layout CSS until after first paint to reduce initial layout thrash
+ try {
+  win.webContents.once('did-stop-loading', () => {
+   // Next tick ensures Chromium has painted once
+   setTimeout(() => {
+    try { applyMaxLayoutCSS(win); }
+    catch (e) { console.error('applyMaxLayoutCSS (quick deferred) failed:', e); }
+   }, 0);
+  });
+ } catch (e) {
+  console.error('applyMaxLayoutCSS quick defer wiring failed:', e);
+ }
+
   win.once('ready-to-show', () => {
     reveal(win);
     try { applyDynamicWidth(win); } catch {}
-    try { applyMaxLayoutCSS(win); } catch {}
     try { attachVWResize(win); } catch {}
     try { requestExpandedLayout(win); } catch {}
   });
@@ -601,6 +613,11 @@ function applyDynamicWidth(win) {
 function attachVWResize(win) {
   if (!win || !win.webContents) return;
   const wc = win.webContents;
+
+  // Run layout-affecting JS only once per window lifetime
+  if (wc.__copilotVWResizeAttached) return;
+  wc.__copilotVWResizeAttached = true;
+
   const script = `
     (function () {
       try {
@@ -624,11 +641,7 @@ function attachVWResize(win) {
     })();
   `;
   const run = () => { try { wc.executeJavaScript(script).catch(() => {}); } catch {} };
-  wc.on('dom-ready', run);
-  wc.on('did-frame-finish-load', run);
-  wc.on('did-navigate-in-page', run);
-  wc.on('did-finish-load', run);
-  run();
+  wc.once('dom-ready', run);
 }
 
 // --- Dynamic width constants (added) ---
@@ -954,21 +967,37 @@ const cssApplyDebounceByWC = new WeakMap();       // webContents -> timeoutId
 
 // CSP-safe injection with re-inject on SPA navigations (and cleanup)
 function injectCSSOnLoad(win, css, keyHolder) {
-  if (!win || !win.webContents) return;
-  const wc = win.webContents;
-  const inject = () => {
-    if (keyHolder.key) {
-      try { wc.removeInsertedCSS(keyHolder.key); } catch {}
-      keyHolder.key = null;
-    }
-    try { wc.insertCSS(css).then(k => { keyHolder.key = k; }).catch(() => {}); }
-    catch (err) { console.error('insertCSS failed:', err); }
-  };
+ if (!win || !win.webContents) return;
+ const wc = win.webContents;
+ if (!keyHolder) return;
+ // Allow callers to update CSS without re-wiring listeners.
+ keyHolder.css = String(css ?? keyHolder.css ?? '');
+
+ const inject = () => {
+  try {
+   const currentCss = String(keyHolder.css ?? '');
+   if (!currentCss) return;
+   if (keyHolder.key) {
+    try { wc.removeInsertedCSS(keyHolder.key); } catch {}
+    keyHolder.key = null;
+   }
+   wc.insertCSS(currentCss)
+    .then(k => { keyHolder.key = k; })
+    .catch(() => {});
+  } catch (err) {
+   console.error('insertCSS failed:', err);
+  }
+ };
+
+ // Wire reinjection hooks exactly once per keyHolder.
+ if (!keyHolder.__wired) {
+  keyHolder.__wired = true;
   wc.on('dom-ready', inject);
   wc.on('did-finish-load', inject);
-  wc.on('did-navigate-in-page', inject);
+//  wc.on('did-navigate-in-page', inject);
   wc.on('did-start-navigation', inject);
-  inject();
+ }
+ inject();
 }
 
 // Inject CSS into all frames (main + iframes), and re-inject on frame loads.
@@ -1023,14 +1052,17 @@ function injectCSSIntoAllFrames(win, css) {
 
 function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
   if (!win) return;
-   const cacheKey = specificMessageId || 'default';
-   let css = maxLayoutCssCache.get(cacheKey);
-   if (!css) {
-    css = buildMaxLayoutCSS({ specificMessageId });
-    maxLayoutCssCache.set(cacheKey, css);
-   }
-  // Apply across all frames so we catch real content surfaces inside iframes
-  injectCSSIntoAllFrames(win, css);
+  const cacheKey = specificMessageId || 'default';
+  let css = maxLayoutCssCache.get(cacheKey);
+  if (!css) {
+   css = buildMaxLayoutCSS({ specificMessageId });
+   maxLayoutCssCache.set(cacheKey, css);
+  }
+  // Main-frame-only: use key tracking + reinject on navigation.
+  if (!win.__maxLayoutKeyHolder) {
+   win.__maxLayoutKeyHolder = { key: null, css: '', __wired: false };
+  }
+  injectCSSOnLoad(win, css, win.__maxLayoutKeyHolder);
 }
 
 function requestExpandedLayout(win) {
@@ -2290,8 +2322,20 @@ function createWindow() {
 
   mainWindow.loadURL(COPILOT_URL); // Load your app
 
+  // Defer heavy layout CSS until after first paint to reduce initial layout thrash
+  try {
+    mainWindow.webContents.once('did-stop-loading', () => {
+      // Next tick ensures Chromium has painted once
+      setTimeout(() => {
+        try { applyMaxLayoutCSS(mainWindow); }
+        catch (e) { console.error('applyMaxLayoutCSS (deferred) failed:', e); }
+      }, 0);
+    });
+  } catch (e) {
+    console.error('applyMaxLayoutCSS defer wiring failed:', e);
+  }
+
   try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
-  try { applyMaxLayoutCSS(mainWindow); } catch (e) { console.error('applyMaxLayoutCSS (outer) failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
   try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
 
