@@ -323,12 +323,12 @@ function createQuickChatWindow() {
   win.once('ready-to-show', () => {
     reveal(win);
  //   try { applyDynamicWidth(win); } catch {}
-    try { attachVWResize(win); } catch {}
-    try { requestExpandedLayout(win); } catch {}
+ //   try { attachVWResize(win); } catch {}
+ //   try { requestExpandedLayout(win); } catch {}
   });
 
   win.webContents.on('did-start-navigation', () => {
-    try { attachVWResize(win); } catch {}
+  //  try { attachVWResize(win); } catch {}
   });
 
 
@@ -760,7 +760,6 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       padding: initial !important;
       padding-left: 1px !important;
     }
-
     
     ${CHAT_SELECTOR} rich-textarea .ql-editor[contenteditable="true"],
     ${CHAT_SELECTOR} .text-input-field_textarea .ql-editor[contenteditable="true"],
@@ -2357,13 +2356,13 @@ function createWindow() {
 
 //  try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
-  try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
+//  try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
 
   // Build native context menu purely from main, based on Chromium's params
 
   // Keep the 'did-stop-loading' handler singular when SPA navigations occur.
   mainWindow.webContents.on('did-start-navigation', () => {
-    try { attachVWResize(mainWindow); } catch {}
+ //   try { attachVWResize(mainWindow); } catch {}
   });
   mainWindow.webContents.on('destroyed', () => {
     try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading);
