@@ -322,7 +322,7 @@ function createQuickChatWindow() {
 
   win.once('ready-to-show', () => {
     reveal(win);
-    try { applyDynamicWidth(win); } catch {}
+ //   try { applyDynamicWidth(win); } catch {}
     try { attachVWResize(win); } catch {}
     try { requestExpandedLayout(win); } catch {}
   });
@@ -2355,7 +2355,7 @@ function createWindow() {
     console.error('applyMaxLayoutCSS defer wiring failed:', e);
   }
 
-  try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
+//  try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
   try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
   try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
 
