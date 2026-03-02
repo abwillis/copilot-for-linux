@@ -722,15 +722,15 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       box-sizing: border-box !important;
       overflow-wrap: anywhere !important;
       word-break: break-word !important;
-
     }
 
-    [class*="layout"], [data-testid="chatOutput"] {
+    [class*="layout"] {
       width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
       max-width: 100% !important;
       box-sizing: border-box !important;
       overflow-x: visible !important;
       overflow-y: visible !important;
+      overflow-wrap: anywhere !important;
       word-break: break-word !important;
     }
 
@@ -969,8 +969,6 @@ ${SELECTORS.llmChatMessageClass},
 
     /* Tables: auto layout & full width to reduce clipping overflow */
     ${SELECTORS.feedContainer} table {
-      margin-left: 12px !important;
-      padding-left: 12px !important;
       table-layout: auto !important;
       width: 100% !important;
     }
