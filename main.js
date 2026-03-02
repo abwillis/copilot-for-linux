@@ -323,7 +323,7 @@ function createQuickChatWindow() {
   win.once('ready-to-show', () => {
     reveal(win);
  //   try { applyDynamicWidth(win); } catch {}
- //   try { attachVWResize(win); } catch {}
+    try { attachVWResize(win); } catch {}
  //   try { requestExpandedLayout(win); } catch {}
   });
 
@@ -725,7 +725,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
 
     }
 
-    [class*="layout"], [data-testid="chatOutput"] {
+    data-testid="chatOutput"] {
       width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
       max-width: 100% !important;
       box-sizing: border-box !important;
@@ -1013,7 +1013,7 @@ function injectCSSOnLoad(win, css, keyHolder) {
   keyHolder.__wired = true;
   wc.on('dom-ready', inject);
   wc.on('did-finish-load', inject);
-//  wc.on('did-navigate-in-page', inject);
+  wc.on('did-navigate-in-page', inject);
   wc.on('did-start-navigation', inject);
  }
  inject();
@@ -1030,22 +1030,20 @@ function injectCSSIntoAllFrames(win, css) {
      if (prev) clearTimeout(prev);
      const t = setTimeout(() => {
       try {
-       // Track per-frame injections so the same frame isn't hit repeatedly.
-       let injected = injectedFrameIdsByWC.get(wc);
-       if (!injected) {
-        injected = new Set();
-        injectedFrameIdsByWC.set(wc, injected);
-       }
+          // IMPORTANT:
+          // Frames can navigate while keeping the same routingId; CSS is dropped on navigation.
+          // Reset injection bookkeeping each apply so navigations get reinjected.
+          const injected = new Set();
+          injectedFrameIdsByWC.set(wc, injected);
 
        // Iterate over the whole frame subtree (Electron 20+)
        const frames = wc.mainFrame?.framesInSubtree ?? wc.mainFrame?.frames ?? [];
        for (const f of frames) {
-        try {
-         const rid = (typeof f?.routingId === 'number') ? f.routingId : null;
-         if (rid !== null && injected.has(rid)) continue;
-         // Only mark as injected after success.
-         f.insertCSS(css).then(() => { if (rid !== null) injected.add(rid); }).catch(() => {});
-        } catch {}
+         try {
+           const rid = (typeof f?.routingId === 'number') ? f.routingId : null;
+            // Always attempt insertion; avoid "already injected" false positives after navigation.
+            f.insertCSS(css).then(() => { if (rid !== null) injected.add(rid); }).catch(() => {});
+         } catch {}
        }
 
        // Main frame injection with key tracking to avoid accumulating duplicates.
@@ -1077,9 +1075,14 @@ function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
    css = buildMaxLayoutCSS({ specificMessageId });
    maxLayoutCssCache.set(cacheKey, css);
   }
-  // Main-frame-only: use key tracking + reinject on navigation.
+  // For Quick Chat windows, inject into all frames to catch iframe-hosted UI.
+  if (win.___copilotRole === 'quick' || win.__copilotRole === 'quick') {
+    injectCSSIntoAllFrames(win, css);
+    return;
+  }
+  // Default: main-frame injection (lighter weight).
   if (!win.__maxLayoutKeyHolder) {
-   win.__maxLayoutKeyHolder = { key: null, css: '', __wired: false };
+    win.__maxLayoutKeyHolder = { key: null, css: '', __wired: false };
   }
   injectCSSOnLoad(win, css, win.__maxLayoutKeyHolder);
 }
