@@ -937,6 +937,20 @@ ${SELECTORS.llmChatMessageClass},
     max-width: 100% !important;
   }
 
+  [class*="tooltip" i] {
+      width: auto !important;
+      max-width: none !important;
+      margin: initial !important;
+      padding: initial !important;
+      box-sizing: border-box !important;
+      text-align: initial !important;
+      justify-content: initial !important;
+      align-items: initial !important;
+      justify-self: initial !important;
+      align-self: initial !important;
+      place-self: initial !important;
+    }
+
   [class*="tooltip" i],
   [class*="fui-Tab__content"] {
     display: inline-block !important;   /* Allows width to fit content */
