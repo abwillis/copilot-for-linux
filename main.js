@@ -1769,8 +1769,10 @@ function createTurndownService() {
   });
 
   try {
-    const { gfm } = turndownPluginGfm;
-    if (gfm) service.use(gfm);
+    const { gfm, tables } = turndownPluginGfm;
+    // Be explicit that tables must go through the GFM table path.
+    if (tables) service.use(tables);
+    if (gfm) service.use(gfm)
   } catch (err) {
     console.error('turndown-plugin-gfm setup failed:', err);
   }
@@ -1823,6 +1825,83 @@ function createTurndownService() {
   return service;
 }
 
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line || '').trim();
+  const core = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  return core.split('|').map(cell => cell.trim());
+}
+
+function isMarkdownTableSeparatorLine(line) {
+  const cells = splitMarkdownTableRow(line);
+  if (!cells.length) return false;
+  return cells.every(cell => /^:?-{3,}:?$/.test(cell));
+}
+
+function isLikelyMarkdownTableBlock(lines) {
+  if (!Array.isArray(lines) || lines.length < 2) return false;
+  const nonEmpty = lines.filter(Boolean);
+  if (nonEmpty.length < 2) return false;
+  if (!nonEmpty[0].includes('|')) return false;
+  if (!isMarkdownTableSeparatorLine(nonEmpty[1])) return false;
+  return nonEmpty.every(line => !line || line.includes('|'));
+}
+
+function formatMarkdownTableBlock(block) {
+  const rawLines = String(block || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if (!isLikelyMarkdownTableBlock(rawLines)) return block;
+
+  const rows = rawLines.map(splitMarkdownTableRow);
+  const columnCount = Math.max(...rows.map(r => r.length));
+
+  for (const row of rows) {
+    while (row.length < columnCount) row.push('');
+  }
+
+  const widths = new Array(columnCount).fill(3);
+  for (let r = 0; r < rows.length; r += 1) {
+    if (r === 1) continue; // separator row rebuilt below
+    for (let c = 0; c < columnCount; c += 1) {
+      widths[c] = Math.max(widths[c], rows[r][c].length, 3);
+    }
+  }
+
+  const separatorSource = rows[1];
+  const separator = separatorSource.map((cell, idx) => {
+    const left = cell.startsWith(':');
+    const right = cell.endsWith(':');
+    const dashes = '-'.repeat(Math.max(widths[idx], 3));
+    if (left && right) return `:${dashes}:`;
+    if (left) return `:${dashes}`;
+    if (right) return `${dashes}:`;
+    return dashes;
+  });
+
+  const formatted = rows.map((row, rowIdx) => {
+    const cells = (rowIdx === 1 ? separator : row).map((cell, idx) => {
+      const value = rowIdx === 1 ? cell : cell.padEnd(widths[idx], ' ');
+      return ` ${value} `;
+    });
+    return `|${cells.join('|')}|`;
+  });
+
+  return formatted.join('\n');
+}
+
+function normalizeMarkdownTables(md) {
+  const blocks = String(md || '').split(/\n{2,}/);
+  const normalized = blocks.map(block => {
+    const lines = block.split('\n').map(line => line.trimRight());
+    return isLikelyMarkdownTableBlock(lines.filter(Boolean))
+      ? formatMarkdownTableBlock(lines.join('\n'))
+      : block;
+  });
+  return normalized.join('\n\n');
+}
+
 function preprocessHtmlForMarkdown(html) {
   let out = String(html || '');
   if (!out.trim()) return '';
@@ -1842,13 +1921,15 @@ function preprocessHtmlForMarkdown(html) {
 }
 
 function postProcessMarkdown(md) {
-  return String(md || '')
+  return normalizeMarkdownTables(
+    String(md || '')
     .replace(/\r\n?/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
     .replace(/([^\n])\n([-*]\s)/g, '$1\n\n$2')
-    .trim();
+    .trim()
+  );
 }
 
 function htmlToMarkdown(html) {
