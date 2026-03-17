@@ -2,6 +2,8 @@
 const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const TurndownService = require('turndown');
+const turndownPluginGfm = require('turndown-plugin-gfm');
 
 // Force a persistent Chromium storage partition for Copilot.
 // Electron: partitions starting with "persist:" use a persistent session. [5](https://www.electronjs.org/docs/latest/api/session)
@@ -1749,76 +1751,117 @@ ipcMain.on(IPC.QUICK_NEW, () => {
   catch (e) { console.error('IPC quick new failed:', e); }
 });
 
-// Minimal HTML → Markdown converter (headings, paragraphs, lists, code, links, quotes)
+// Turndown-backed HTML → Markdown converter.
+// Regex is only used here for targeted preprocessing/post-processing around Turndown.
+const turndownService = createTurndownService();
+
+function createTurndownService() {
+  const service = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+    fence: '```',
+    bulletListMarker: '-',
+    emDelimiter: '*',
+    strongDelimiter: '**',
+    linkStyle: 'inlined',
+    linkReferenceStyle: 'full',
+    preformattedCode: true,
+  });
+
+  try {
+    const { gfm } = turndownPluginGfm;
+    if (gfm) service.use(gfm);
+  } catch (err) {
+    console.error('turndown-plugin-gfm setup failed:', err);
+  }
+
+  // Remove obvious non-content / executable elements if any survive renderer cleanup.
+  try {
+    service.remove([
+      'script', 'style', 'noscript', 'template',
+      'button', 'input', 'select', 'textarea',
+      'svg', 'canvas', 'iframe'
+    ]);
+  } catch (err) {
+    console.error('Turndown remove() setup failed:', err);
+  }
+
+  // Preserve fenced code blocks exactly, including language hints when present.
+  service.addRule('fencedCodeBlocks', {
+    filter: 'pre',
+    replacement: function (_content, node) {
+      const codeNode =
+        node.firstElementChild && node.firstElementChild.nodeName === 'CODE'
+          ? node.firstElementChild
+          : node;
+      const raw = String(codeNode.textContent || '')
+        .replace(/\u00A0/g, ' ')
+        .replace(/\r\n?/g, '\n');
+      const className = String(codeNode.getAttribute?.('class') || '');
+      const language = (className.match(/(?:^|\s)language-([A-Za-z0-9_+-]+)/) || [])[1] || '';
+      const body = raw.replace(/^\n+|\n+$/g, '');
+      return `\n\n\`\`\`${language}\n${body}\n\`\`\`\n\n`;
+    }
+  });
+
+  // Convert <br> to hard line breaks consistently.
+  service.addRule('hardLineBreak', {
+    filter: 'br',
+    replacement: function () {
+      return '  \n';
+    }
+  });
+
+  // Treat HR explicitly so separators survive cleanup.
+  service.addRule('thematicBreak', {
+    filter: 'hr',
+    replacement: function () {
+      return '\n\n---\n\n';
+    }
+  });
+
+  return service;
+}
+
+function preprocessHtmlForMarkdown(html) {
+  let out = String(html || '');
+  if (!out.trim()) return '';
+
+  out = stripExecutableBlocks(out)
+    .replace(/<!--([\s\S]*?)-->/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00A0/g, ' ');
+
+  // Copilot often renders diff/code lines as adjacent block nodes with no text newlines.
+  // Inject line boundaries before Turndown sees the HTML.
+  out = out
+    .replace(/<\/(div|p|li|tr|h[1-6]|blockquote|pre|table|ul|ol)>\s*</gi, '</$1>\n<')
+    .replace(/<(br)\s*\/?\s*>/gi, '<$1 />\n');
+
+  return out.trim();
+}
+
+function postProcessMarkdown(md) {
+  return String(md || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/([^\n])\n(#{1,6}\s)/g, '$1\n\n$2')
+    .replace(/([^\n])\n([-*]\s)/g, '$1\n\n$2')
+    .trim();
+}
+
 function htmlToMarkdown(html) {
-  if (!html || !html.trim()) return '';
-  // 1) Decode common entities so we operate on real tags
-  let md = decodeEntities(html);
-  // 2) Remove executable/unsafe blocks first
-  md = stripExecutableBlocks(md);
+  const preparedHtml = preprocessHtmlForMarkdown(html);
+  if (!preparedHtml) return '';
 
-  // 3) Blockquotes
-  md = md.replace(/<blockquote[^>]*>/gi, '\n> ')
-         .replace(/<\/blockquote>/gi, '\n');
-
-  // 4) Headings
-  md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_, c) => `\n# ${stripTags(c)}\n`);
-  md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (_, c) => `\n## ${stripTags(c)}\n`);
-  md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_, c) => `\n### ${stripTags(c)}\n`);
-  md = md.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, (_, c) => `\n#### ${stripTags(c)}\n`);
-  md = md.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, (_, c) => `\n##### ${stripTags(c)}\n`);
-  md = md.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, (_, c) => `\n###### ${stripTags(c)}\n`);
-
-  // 5) Paragraphs & line breaks
-  md = md.replace(/<p[^>]*>/gi, '\n')
-         .replace(/<\/p>/gi, '\n')
-         .replace(/<br\s*\/?>/gi, '\n');
-
-  // 6) Lists
-  md = md.replace(/<ul[^>]*>/gi, '\n')
-         .replace(/<\/ul>/gi, '\n');
-  md = md.replace(/<ol[^>]*>/gi, '\n')
-         .replace(/<\/ol>/gi, '\n');
-  md = md.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_, c) => `- ${stripTags(c)}\n`);
-
-  // 7) Bold / Italic
-  md = md.replace(/<(b|strong)[^>]*>([\s\S]*?)<\/\1>/gi, (_, __, c) => `**${stripTags(c)}**`);
-  md = md.replace(/<(i|em)[^>]*>([\s\S]*?)<\/\1>/gi,   (_, __, c) => `*${stripTags(c)}*`);
-
-  // 8) Inline code
-  md = md.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, (_, c) => '`' + stripTags(c).replace(/\n+/g, ' ') + '`');
-
-  // 9) Preformatted blocks → fenced code
-  md = md.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_, c) => {
-    const inner = c.replace(/<\/?code[^>]*>/gi, '');
-    const clean = stripTags(inner).replace(/\r?\n/g, '\n');
-    return `\n~~~\n${clean.trim()}\n~~~\n`;
-  });
-
-  // 10) Links (emit bare href if no text)
-  md = md.replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, text) => {
-    const t = stripTags(text).trim();
-    const h = href.trim();
-    return t ? `[${t}](${h})` : h;
-  });
-
-  // 11) Images → alt + URL, or URL
-  md = md.replace(/<img[^>]*alt=["']([^"']*)["'][^>]*src=["']([^"']+)["'][^>]*>/gi, (_m, alt, src) => {
-    const a = alt.trim(); const s = src.trim();
-    return a ? `![${a}](${s})` : s;
-  });
-
-  // 12) Strip remaining tags and normalize whitespace
-  md = stripTags(md);
-
-  // Normalize trailing whitespace only (do NOT collapse structural blank lines)
-  md = md.replace(/[ \t]+\n/g, '\n');
-
-  // Ensure at least one blank line between block elements
-  md = md.replace(/\n{4,}/g, '\n\n');
-
-  md = md.trim();
-  return md;
+  try {
+    return postProcessMarkdown(turndownService.turndown(preparedHtml));
+  } catch (err) {
+    console.error('Turndown conversion failed; falling back to plain text extraction:', err);
+    const safeHtml = stripExecutableBlocks(decodeEntities(preparedHtml));
+    return postProcessMarkdown(stripTags(safeHtml));
+  }
 }
 
 function stripTags(s) {
@@ -1830,7 +1873,7 @@ function stripTags(s) {
 
 // --- Centralized sanitizers ---
 function decodeEntities(s) {
-  // Minimal entity decode to operate on real tags and readable text
+  // Remove any remaining HTML tags; entity decoding is handled earlier when needed.
   return String(s || '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -2663,7 +2706,6 @@ function createTray() {
 
   // Validate path during development (optional)
  //  console.log('Tray icon exists?', require('fs').existsSync(iconPath));
-
 
   const trayImage = trayImage24 || nativeImage.createFromPath(iconPath);
   const smallImage = trayImage.isEmpty ? null : trayImage.resize({ width: 24, height: 24 });
