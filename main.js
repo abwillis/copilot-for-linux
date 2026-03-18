@@ -597,6 +597,8 @@ const IGNORE_SELECTORS = [
   `[class*="contextualMenu" i]` ,
   `[class*="usermessage" i]` ,
   `[id*="user-message"]` ,
+  `[id*="toggle-work"]` ,
+  `[id*="toggle-web"]` ,
   `[class*="actionsContainer"]` 
 ];
 const IGNORE_JOINED = IGNORE_SELECTORS.join(', ');
@@ -954,7 +956,9 @@ ${SELECTORS.llmChatMessageClass},
     }
 
   [class*="tooltip" i],
-  [class*="fui-Tab__content"] {
+  [class*="fui-Tab__content"],
+  [id="toggle-work"],
+  [id="toggle-web"]  {
     display: inline-block !important;   /* Allows width to fit content */
     width: fit-content !important;      /* Shrinks to text width */
     height: fit-content !important;     /* Shrinks to text height */
