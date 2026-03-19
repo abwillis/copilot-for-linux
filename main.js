@@ -500,11 +500,11 @@ const CHAT_ROOT_SELECTORS = [
   '[id*="messagelist" i]',
   '[role="feed"]'
 ];
-const CHAT_SELECTOR = '#mainChat'; // Root container for the chat UI
-const MESSAGE_LIST_SCOPE = '#mainChat div[id*="messagelist" i]';
-
+const CHAT_SCOPE_SELECTOR = CHAT_ROOT_SELECTORS.join(', ');
+const CHAT_SCOPE_PSEUDO = `:is(${CHAT_SCOPE_SELECTOR})`;
+const MESSAGE_LIST_SCOPE = `:is(#mainChat div[id*="messagelist" i], [data-testid="MessageListContainer"] [role="feed"], [id*="messagelist" i], [role="feed"])`
 // Parameterized single-message selector
-const messageContentById = (id) => `#mainChat #${id}`;
+const messageContentById = (id) => `${CHAT_SCOPE_PSEUDO} #${id}, [id="${id}"]`;
 
 // === Safe 'did-stop-loading' wiring =========================================
 // A named handler so removeListener(...) can reliably detach the same function.
@@ -531,8 +531,8 @@ function ensureDidStopLoadingHandler(webContents) {
 // 7 options grouped into containers vs content for correct layout application
 const SELECTORS = {
   // Containers (safe to apply full-viewport/layout rules)
-  feedContainer:           '${MESSAGE_LIST_SCOPE} [data-testid="MessageListContainer"] [role="feed"]',
-  listContainer:           '${MESSAGE_LIST_SCOPE} [data-testid="MessageListContainer"]',
+  feedContainer: `${MESSAGE_LIST_SCOPE}[data-testid="MessageListContainer"] [role="feed"], ${MESSAGE_LIST_SCOPE}`, 
+  listContainer: `${MESSAGE_LIST_SCOPE}[data-testid="MessageListContainer"], [data-testid="MessageListContainer"]`,
   copilotChatClass: `[class*="CopilotChat"]`,
   layoutMainPane: `[data-testid="layout-main-pane"]`,
   chatMessageResponserId: `[id*="chatMessageResponser"]`,
@@ -544,27 +544,19 @@ const SELECTORS = {
 
   // Content targets (do NOT force height: 100vh here)H
   allMessageContent_class:
-    '${MESSAGE_LIST_SCOPE} [role="feed"] .fai-CopilotMessage .fai-CopilotMessage__content',
+    `${MESSAGE_LIST_SCOPE} .fai-CopilotMessage .fai-CopilotMessage__content`, 
   allMessageContent_class_lowSpecificity:
-    '${MESSAGE_LIST_SCOPE} :where([role="feed"]) :where(.fai-CopilotMessage) :where(.fai-CopilotMessage__content)',
+    `${MESSAGE_LIST_SCOPE} :where(.fai-CopilotMessage) :where(.fai-CopilotMessage__content)`, 
   allMessageContent_attr:
-    '${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"][aria-labelledby*="copilot-message-" i] > div[id^="copilot-message-" i]',
+    `${MESSAGE_LIST_SCOPE} [role="article"][aria-labelledby*="copilot-message-" i] > div[id^="copilot-message-" i]`, 
   linksInContent_class:
-    '${MESSAGE_LIST_SCOPE} [role="feed"] .fai-CopilotMessage__content a',
+    `${MESSAGE_LIST_SCOPE} .fai-CopilotMessage__content a`, 
   linksInContent_attr:
-    '${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] > div[id^="copilot-message-"] a',
+    `${MESSAGE_LIST_SCOPE} [role="article"] > div[id^="copilot-message-"] a`, 
   minimalSemantic:
-    '${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] > [id^="copilot-message-"]',
+    `${MESSAGE_LIST_SCOPE} [role="article"] > [id^="copilot-message-"]`, 
 };
-/*
-const PREFERRED_CONTAINER_SELECTORS = [
-  SELECTORS.feedContainer,
-  SELECTORS.copilotChatClass,
-  SELECTORS.layoutMainPane,
-  SELECTORS.chatMessageResponserId,
-  SELECTORS.markdownReplyTestId,
-];
-*/
+
 // --- Centralized ignore list: ALWAYS excluded from layout adjustments ---
 const IGNORE_SELECTORS = [
   `rich-textarea`,
@@ -676,7 +668,7 @@ const MAX_VW = 100;
 function buildMaxLayoutCSS({ specificMessageId } = {}) {
   const CONTAINERS = [
     // existing containers
-    CHAT_SELECTOR,
+    CHAT_SCOPE_SELECTOR, 
     SELECTORS.feedContainer,
     SELECTORS.listContainer,
     SELECTORS.copilotChatClass,
@@ -728,7 +720,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       overscroll-behavior: contain !important;   /* avoid nested scroll chaining */
     }
 
-    ${CHAT_SELECTOR}, ${CHAT_SELECTOR} * {
+    ${CHAT_SCOPE_PSEUDO}, ${CHAT_SCOPE_PSEUDO} * { 
       max-width: 100% !important;
       box-sizing: border-box !important;
       overflow-wrap: anywhere !important;
@@ -772,12 +764,12 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       padding-left: 1px !important;
     }
     
-    ${CHAT_SELECTOR} rich-textarea .ql-editor[contenteditable="true"],
-    ${CHAT_SELECTOR} .text-input-field_textarea .ql-editor[contenteditable="true"],
-    ${CHAT_SELECTOR} .ql-editor[contenteditable="true"],
-    ${CHAT_SELECTOR} div[contenteditable="true"][role="textbox"],
-    ${CHAT_SELECTOR} textarea,
-    ${CHAT_SELECTOR} input {
+    ${CHAT_SCOPE_PSEUDO} rich-textarea .ql-editor[contenteditable="true"], 
+    ${CHAT_SCOPE_PSEUDO} .text-input-field_textarea .ql-editor[contenteditable="true"], 
+    ${CHAT_SCOPE_PSEUDO} .ql-editor[contenteditable="true"], 
+    ${CHAT_SCOPE_PSEUDO} div[contenteditable="true"][role="textbox"], 
+    ${CHAT_SCOPE_PSEUDO} textarea, 
+    ${CHAT_SCOPE_PSEUDO} input {
       pointer-events: auto !important;
       user-select: text !important;
       -webkit-user-select: text !important;
@@ -785,6 +777,7 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       opacity: 1 !important;
       z-index: 9999 !important;
     }
+
 ${SELECTORS.llmChatMessageClass},
     ${SELECTORS.chatMessageContainerId},
     ${SELECTORS.llmChatMessageTestId},
@@ -859,7 +852,7 @@ ${SELECTORS.llmChatMessageClass},
     }
 
    /* Make every message article bubble full-width and text-wrapping */
-   ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] {
+   ${MESSAGE_LIST_SCOPE} [role="article"] { 
      width: 100% !important;
      max-width: none !important;
      box-sizing: border-box !important;
@@ -870,11 +863,11 @@ ${SELECTORS.llmChatMessageClass},
    }
 
     /* Ensure plain text elements wrap within message articles */
-    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] p,
-    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] li,
-    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] ul,
-    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] ol,
-    ${MESSAGE_LIST_SCOPE} [role="feed"] [role="article"] blockquote {
+    ${MESSAGE_LIST_SCOPE} [role="article"] p, 
+    ${MESSAGE_LIST_SCOPE} [role="article"] li, 
+    ${MESSAGE_LIST_SCOPE} [role="article"] ul, 
+    ${MESSAGE_LIST_SCOPE} [role="article"] ol, 
+    ${MESSAGE_LIST_SCOPE} [role="article"] blockquote {
       overflow-wrap: anywhere !important;
       word-break: break-word !important;
       white-space: normal !important;
@@ -2152,9 +2145,7 @@ async function saveSelectionAsMarkdown(win) {
 // ---------- Chat pane save helpers ----------
 // A) Hide everything except the chat pane, then savePage (HTMLOnly/MHTML)
 async function saveOnlyPaneWithSavePage(win, filePath, format /* 'HTMLOnly' | 'MHTML' */) {
-  const snapshot = await getChatPaneSnapshot(win);
-  const selector = snapshot?.selector || CHAT_SELECTOR;
-  const selectorLiteral = JSON.stringify(selector);
+  const selectorGroup = snapshot?.selector ? `:is(${snapshot.selector})` : CHAT_SCOPE_PSEUDO; 
   // Make everything except the chat invisible but still laid out.
   // Using opacity/pointer-events instead of display:none helps virtualized lists keep measurements,
   // reducing "white page" issues when saving.
@@ -2163,11 +2154,11 @@ async function saveOnlyPaneWithSavePage(win, filePath, format /* 'HTMLOnly' | 'M
       overflow: auto !important;
       background: #ffffff !important;
     }
-      *:not(${selector}):not(${selector} *) {
+  *:not(${selectorGroup}):not(${selectorGroup} *) { 
       opacity: 0 !important;
       pointer-events: none !important;
     }
-      ${selector} {
+  ${selectorGroup} { 
       opacity: 1 !important;
       pointer-events: auto !important;
       width: 100% !important;
@@ -2209,11 +2200,11 @@ async function savePaneAsStandaloneHTML(win, filePath) {
   <title>${(result && result.title) ? result.title : 'Copilot Chat'}</title>
   <style>
     html, body { margin: 0; padding: 0; }
-    ${CHAT_SELECTOR} { width: 100%; max-width: 100%; }
+    .copilot-export-root { width: 100%; max-width: 100%; } 
   </style>
 </head>
 <body>
-${(result && result.html) ? result.html : '<p>Chat pane not found.</p>'}
+  <div class="copilot-export-root">${(result && result.html) ? result.html : '<p>Chat pane not found.</p>'}</div> 
 </body>
 </html>`;
   await fs.promises.writeFile(filePath, htmlDoc, 'utf8');
@@ -2266,13 +2257,13 @@ async function savePaneAsCleanHTML(win, filePath) {
     blockquote { border-left: 3px solid #cbd5e1; margin: 0.4em 0; padding: 0.2em 0.8em; color: #555; }
     table { border-collapse: collapse; }
     td, th { border: 1px solid #e5e7eb; padding: 6px 8px; }
-    /* Make top-level container stretch full width */
-    ${CHAT_SELECTOR} { width: 100%; max-width: 100%; }
+    /* Make export wrapper stretch full width */ 
+    .copilot-export-root { width: 100%; max-width: 100%; } 
   </style>
   <!-- NOTE: This cleaned export removes hashed classes/inline styles for readability. -->
 </head>
 <body>
-${result.html || '<p>No chat content found.</p>'}
+<div class="copilot-export-root">${result.html || '<p>No chat content found.</p>'}</div> 
 </body>
 </html>`;
   await fs.promises.writeFile(filePath, htmlDoc, 'utf8');
