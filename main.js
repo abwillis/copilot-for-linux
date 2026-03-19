@@ -493,7 +493,14 @@ function createQuickChatWindow() {
 
 
 // --- Make the site use the full viewport by injecting CSS (CSP-safe) ---
-const CHAT_SELECTOR = '#mainChat';  // Root container for the chat UI
+const CHAT_ROOT_SELECTORS = [
+  '#mainChat',
+  '[data-testid="layout-main-pane"]',
+  '[data-testid="MessageListContainer"]',
+  '[id*="messagelist" i]',
+  '[role="feed"]'
+];
+const CHAT_SELECTOR = '#mainChat'; // Root container for the chat UI
 const MESSAGE_LIST_SCOPE = '#mainChat div[id*="messagelist" i]';
 
 // Parameterized single-message selector
@@ -1533,34 +1540,164 @@ function ensureSaveState(win) {
   if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
 }
 
+function buildLocateChatRootScript({ includeHtml = true } = {}) {
+  const selectorsJson = JSON.stringify(CHAT_ROOT_SELECTORS);
+  const includeHtmlLiteral = includeHtml ? 'true' : 'false';
+  return `
+  (function () {
+    const candidates = ${selectorsJson};
+    function visible(el) {
+      if (!el) return false;
+      const r = el.getBoundingClientRect?.();
+      return !!r && r.width > 0 && r.height > 0;
+    }
+ 
+    const found = [];
+    for (const sel of candidates) {
+      try {
+        document.querySelectorAll(sel).forEach(el => found.push({ sel, el }));
+      } catch {}
+    }
+ 
+    if (!found.length) return null;
+ 
+    const scored = found.map(({ sel, el }) => {
+      let score = 0;
+      try {
+        if (visible(el)) score += 1000;
+        score += (el.querySelectorAll?.('[role="article"]').length ?? 0) * 25;
+        score += (el.querySelectorAll?.('[id^="copilot-message-"]').length ?? 0) * 25;
+        score += (el.querySelectorAll?.('[role="feed"]').length ?? 0) * 50;
+        score += Math.min(String(el.innerText || '').length, 500);
+      } catch {}
+      return { sel, el, score };
+    });
+ 
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (!best || !best.el) return null;
+ 
+    return {
+      selector: best.sel,
+      html: ${includeHtmlLiteral} ? best.el.outerHTML : '',
+      textLength: String(best.el.innerText || '').length,
+      score: Number(best.score || 0)
+    };
+  })();
+  `;
+ }
+ 
+async function executeInAllFrames(win, source) {
+  if (!win?.webContents) return [];
+  const results = [];
+ 
+  try {
+    const top = await win.webContents.executeJavaScript(source, true).catch(() => null);
+    if (top) results.push({ where: 'top', value: top });
+  } catch {}
+ 
+  const frames = win.webContents.mainFrame?.framesInSubtree ?? [];
+  for (const frame of frames) {
+    try {
+      const value = await frame.executeJavaScript(source, true).catch(() => null);
+      if (value) results.push({ where: `frame:${frame.routingId}`, value });
+    } catch {}
+  }
+ 
+  return results;
+ }
+ 
+ async function findBestChatRoot(win, { includeHtml = true } = {}) {
+  const results = await executeInAllFrames(win, buildLocateChatRootScript({ includeHtml }));
+  if (!results.length) return null;
+ 
+  results.sort((a, b) => {
+    const aScore = Number(a?.value?.score || 0);
+    const bScore = Number(b?.value?.score || 0);
+    if (bScore !== aScore) return bScore - aScore;
+    const aLen = Number(a?.value?.textLength || 0);
+    const bLen = Number(b?.value?.textLength || 0);
+    return bLen - aLen;
+  });
+ 
+  return results[0];
+ }
+ 
+ async function getChatPaneSnapshot(win) {
+  const best = await findBestChatRoot(win, { includeHtml: true });
+  if (!best?.value) {
+    return { ok: false, html: '', textLength: 0, selector: null };
+  }
+  return {
+    ok: true,
+    html: String(best.value.html || ''),
+    textLength: Number(best.value.textLength || 0),
+    selector: best.value.selector || null
+  };
+ }
+
 // ---------- Chat pane selection helper ----------
 // Select the entire chat pane content in the renderer and return selection stats
 async function selectChatPane(win) {
-  const res = await win.webContents.executeJavaScript(`
-    (function() {
-      const el = document.querySelector('${CHAT_SELECTOR}');
-      if (!el) return { ok:false, selectedTextLength:0 };
-      try {
-        // Try to reveal as much content as possible before selecting (helps some virtualized views)
-        el.scrollTo({ top: 0, behavior: 'auto' });
-      } catch {}
-      try {
-        const sel = window.getSelection && window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          const range = document.createRange();
-          range.selectNodeContents(el);
-          sel.addRange(range);
-          const txt = String(sel.toString() || '');
-          return { ok:true, selectedTextLength: txt.length };
-        }
-      } catch (e) {
-        return { ok:false, selectedTextLength:0, err: String(e) };
-      }
-      return { ok:false, selectedTextLength:0 };
-    })();
-  `);
-  return res;
+ const js = `
+ (function () {
+   const candidates = ${JSON.stringify(CHAT_ROOT_SELECTORS)};
+
+   function visible(el) {
+     if (!el) return false;
+     const r = el.getBoundingClientRect?.();
+     return !!r && r.width > 0 && r.height > 0;
+   }
+
+   let best = null;
+   let bestScore = -1;
+
+   for (const sel of candidates) {
+     let nodes = [];
+     try { nodes = Array.from(document.querySelectorAll(sel)); } catch {}
+     for (const el of nodes) {
+       let score = 0;
+       try {
+         if (visible(el)) score += 1000;
+         score += (el.querySelectorAll?.('[role="article"]').length ?? 0) * 25;
+         score += (el.querySelectorAll?.('[id^="copilot-message-"]').length ?? 0) * 25;
+         score += (el.querySelectorAll?.('[role="feed"]').length ?? 0) * 50;
+         score += Math.min(String(el.innerText || '').length, 500);
+       } catch {}
+       if (score > bestScore) {
+         best = el;
+         bestScore = score;
+       }
+     }
+   }
+
+   if (!best) return { ok: false, selectedTextLength: 0 };
+
+   try { best.scrollIntoView({ block: 'start', inline: 'nearest' }); } catch {}
+
+   const sel = window.getSelection?.();
+   if (!sel) return { ok: false, selectedTextLength: 0 };
+
+   sel.removeAllRanges();
+   const range = document.createRange();
+   range.selectNodeContents(best);
+   sel.addRange(range);
+
+   const txt = String(sel.toString() || '');
+   return {
+     ok: !!txt.length,
+     selectedTextLength: txt.length
+   };
+ })();
+ `;
+
+ const results = await executeInAllFrames(win, js);
+ const success = results
+   .map(r => r.value)
+   .filter(v => v?.ok)
+   .sort((a, b) => Number(b.selectedTextLength || 0) - Number(a.selectedTextLength || 0))[0];
+
+ return success || { ok: false, selectedTextLength: 0 }
 }
 
 // ---------- Selection → Markdown helpers ----------
@@ -2015,6 +2152,9 @@ async function saveSelectionAsMarkdown(win) {
 // ---------- Chat pane save helpers ----------
 // A) Hide everything except the chat pane, then savePage (HTMLOnly/MHTML)
 async function saveOnlyPaneWithSavePage(win, filePath, format /* 'HTMLOnly' | 'MHTML' */) {
+  const snapshot = await getChatPaneSnapshot(win);
+  const selector = snapshot?.selector || CHAT_SELECTOR;
+  const selectorLiteral = JSON.stringify(selector);
   // Make everything except the chat invisible but still laid out.
   // Using opacity/pointer-events instead of display:none helps virtualized lists keep measurements,
   // reducing "white page" issues when saving.
@@ -2023,11 +2163,11 @@ async function saveOnlyPaneWithSavePage(win, filePath, format /* 'HTMLOnly' | 'M
       overflow: auto !important;
       background: #ffffff !important;
     }
-    *:not(${CHAT_SELECTOR}):not(${CHAT_SELECTOR} *) {
+      *:not(${selector}):not(${selector} *) {
       opacity: 0 !important;
       pointer-events: none !important;
     }
-    ${CHAT_SELECTOR} {
+      ${selector} {
       opacity: 1 !important;
       pointer-events: auto !important;
       width: 100% !important;
@@ -2055,13 +2195,12 @@ async function savePaneAsStandaloneHTML(win, filePath) {
   const url = win.webContents.getURL();
   let origin = '';
   try { origin = new URL(url).origin; } catch {}
-  const result = await win.webContents.executeJavaScript(`
-    (function() {
-      const el = document.querySelector('${CHAT_SELECTOR}');
-      if (!el) return { ok:false, html:'', title: document.title };
-      return { ok:true, html: el.outerHTML, title: document.title };
-    })();
-  `);
+  const snapshot = await getChatPaneSnapshot(win);
+  const result = {
+    ok: !!snapshot?.ok,
+    html: String(snapshot?.html || ''),
+    title: win.webContents.getTitle?.() || 'Copilot Chat'
+  };
   const htmlDoc = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2082,33 +2221,30 @@ ${(result && result.html) ? result.html : '<p>Chat pane not found.</p>'}
 
 // B2) Clean HTML export: strip noisy classes/styles and add minimal readable CSS
 async function savePaneAsCleanHTML(win, filePath) {
+  const snapshot = await getChatPaneSnapshot(win);
+  if (!snapshot?.ok) {
+    try { dialog.showErrorBox('Save Chat Pane', 'Chat pane not found.'); } catch {}
+    return;
+  }
   const result = await win.webContents.executeJavaScript(`
-    (function() {
-      const root = document.querySelector('${CHAT_SELECTOR}');
-      if (!root) return { ok:false, title: document.title, html:'' };
-      // clone and sanitize
-      const clone = root.cloneNode(true);
-      // remove hashed classes & inline styles (keeps text content)
-      clone.querySelectorAll('[class]').forEach(n => n.removeAttribute('class'));
-      clone.querySelectorAll('[style]').forEach(n => n.removeAttribute('style'));
-      // remove noisy attributes
-      clone.querySelectorAll('*').forEach(n => {
-        // drop data-* and aria-* and role, tabindex
-        [...n.attributes].forEach(a => {
-          const name = a.name.toLowerCase();
-          if (name.startsWith('data-') || name.startsWith('aria-') || name === 'role' || name === 'tabindex') {
-            n.removeAttribute(a.name);
-          }
-          // drop ephemeral ids except the root
-          if (name === 'id' && n !== clone) n.removeAttribute('id');
-        });
-      })
-      // remove empty containers to reduce noise
-      clone.querySelectorAll('div').forEach(n => { if (!n.textContent.trim()) n.remove(); });
-      // attempt to keep message semantics if present
-      // (optional heuristics can be added here)
-      return { ok:true, title: document.title, html: clone.innerHTML };
-    })();
+  (function() {
+    const root = document.createElement('div');
+    root.innerHTML = ${JSON.stringify(String(snapshot.html || ''))};
+    const clone = root.firstElementChild || root;
+    clone.querySelectorAll('[class]').forEach(n => n.removeAttribute('class'));
+    clone.querySelectorAll('[style]').forEach(n => n.removeAttribute('style'));
+    clone.querySelectorAll('*').forEach(n => {
+      [...n.attributes].forEach(a => {
+        const name = a.name.toLowerCase();
+        if (name.startsWith('data-') || name.startsWith('aria-') || name === 'role' || name === 'tabindex') {
+          n.removeAttribute(a.name);
+        }
+        if (name === 'id' && n !== clone) n.removeAttribute('id');
+      });
+    });
+    clone.querySelectorAll('div').forEach(n => { if (!n.textContent.trim()) n.remove(); });
+    return { ok:true, title: document.title, html: clone.innerHTML };
+  })();
   `);
   const htmlDoc = `<!DOCTYPE html>
 <html lang="en">
@@ -2192,69 +2328,57 @@ async function promptSaveChatPane(win) {
 async function saveChatPaneAsMarkdown(win, filePath) {
   if (!win) return;
   try {
-   const result = await win.webContents.executeJavaScript(`
-   (function() {
-    const root = document.querySelector('${CHAT_SELECTOR}');
-    if (!root) return { ok:false, html:'', title: document.title };
-
-    // Clone so we never mutate the live DOM
-    const clone = root.cloneNode(true);
-
-    // -------------------------------
-    // DOM CLEANUP (Copilot-specific)
-    // -------------------------------
-
-    // Known non-content UI affordances:
-    // copy buttons, feedback icons, toolbars, hover menus, references
-    const JUNK_SELECTORS = [
-     'button',
-     '[role="button"]',
-     '[data-testid*="copy"]',
-     '[data-testid*="feedback"]',
-     '[data-testid*="thumb"]',
-     '[data-testid*="reaction"]',
-     '[data-testid*="reference"]',
-     '[data-testid*="citation"]',
-     '[class*="copy" i]',
-     '[class*="feedback" i]',
-     '[class*="toolbar" i]',
-     '[class*="action" i]',
-     '[class*="hover" i]',
-     '[class*="menu" i]',
-     '[class*="icon" i]'
-    ];
-
-    clone.querySelectorAll(JUNK_SELECTORS.join(',')).forEach(el => {
-     try { el.remove(); } catch {}
-    });
-
-    // Explicitly preserve semantic structures
-    clone.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
-     try { el.setAttribute('data-preserve', 'true'); } catch {}
-    });
-
-    // Remove empty wrapper nodes that add no content,
-    // but do NOT touch semantic structures
-    clone.querySelectorAll('div, span').forEach(el => {
-     try {
-      if (
-       !el.textContent.trim() &&
-       !el.querySelector('[data-preserve]') &&
-       !el.querySelector('pre, code, table, ul, ol')
-      ) {
-       el.remove();
-      }
-     } catch {}
-    });
-
-    return {
-     ok: true,
-     html: clone.innerHTML,
-     title: document.title
-    };
-   })();
-   `);
-
+    const snapshot = await getChatPaneSnapshot(win);
+    if (!snapshot?.ok) {
+      try { dialog.showErrorBox('Save Chat Pane as Markdown', 'Chat pane not found.'); } catch {}
+      return;
+    }
+    const result = await win.webContents.executeJavaScript(`
+    (function() {
+      const holder = document.createElement('div');
+      holder.innerHTML = ${JSON.stringify(String(snapshot.html || ''))};
+      const clone = holder.firstElementChild || holder;
+      const JUNK_SELECTORS = [
+        'button',
+        '[role="button"]',
+        '[data-testid*="copy"]',
+        '[data-testid*="feedback"]',
+        '[data-testid*="thumb"]',
+        '[data-testid*="reaction"]',
+        '[data-testid*="reference"]',
+        '[data-testid*="citation"]',
+        '[class*="copy" i]',
+        '[class*="feedback" i]',
+        '[class*="toolbar" i]',
+        '[class*="action" i]',
+        '[class*="hover" i]',
+        '[class*="menu" i]',
+        '[class*="icon" i]'
+      ];
+      clone.querySelectorAll(JUNK_SELECTORS.join(',')).forEach(el => {
+        try { el.remove(); } catch {}
+      });
+      clone.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
+        try { el.setAttribute('data-preserve', 'true'); } catch {}
+      });
+      clone.querySelectorAll('div, span').forEach(el => {
+        try {
+          if (
+            !el.textContent.trim() &&
+            !el.querySelector('[data-preserve]') &&
+            !el.querySelector('pre, code, table, ul, ol')
+          ) {
+            el.remove();
+          }
+        } catch {}
+      });
+      return {
+        ok: true,
+        html: clone.innerHTML,
+        title: document.title
+      };
+    })();
+    `)
     if (!result?.ok) {
       try { dialog.showErrorBox('Save Chat Pane as Markdown', 'Chat pane not found.'); } catch {}
       return;
@@ -2264,12 +2388,12 @@ async function saveChatPaneAsMarkdown(win, filePath) {
     // (No entity decoding; structure already preserved)
     const paneHtml = String(result.html || '');
 
-  // IMPORTANT:
-  // Copilot renders diff lines as separate block elements (div/span)
-  // with NO newline text nodes. Inject newlines between blocks so
-  // diffs and code retain line structure.
-  const withLineBreaks = paneHtml.replace(/></g, '>\n<');
-  const safeHtml = stripExecutableBlocks(withLineBreaks);
+    // IMPORTANT:
+    // Copilot renders diff lines as separate block elements (div/span)
+    // with NO newline text nodes. Inject newlines between blocks so
+    // diffs and code retain line structure.
+    const withLineBreaks = paneHtml.replace(/></g, '>\n<');
+    const safeHtml = stripExecutableBlocks(withLineBreaks);
     const md = htmlToMarkdown(safeHtml);
     await fs.promises.writeFile(filePath, md, 'utf8');
   } catch (err) {
@@ -2281,13 +2405,12 @@ async function saveChatPaneAsMarkdown(win, filePath) {
 async function saveChatPaneAsText(win, filePath) {
   if (!win) return;
   try {
-    const result = await win.webContents.executeJavaScript(`
-      (function() {
-        const el = document.querySelector('${CHAT_SELECTOR}');
-        if (!el) return { ok:false, html:'', title: document.title };
-        return { ok:true, html: el.innerHTML, title: document.title };
-      })();
-    `);
+    const snapshot = await getChatPaneSnapshot(win);
+    const result = {
+      ok: !!snapshot?.ok,
+      html: String(snapshot?.html || ''),
+      title: win.webContents.getTitle?.() || 'Copilot Chat'
+    };
     if (!result?.ok) {
       try { dialog.showErrorBox('Save Chat Pane as Text', 'Chat pane not found.'); } catch {}
       return;
