@@ -749,15 +749,6 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
 
     }
 
-    data-testid="chatOutput"] {
-      width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
-      max-width: 100% !important;
-      box-sizing: border-box !important;
-      overflow-x: visible !important;
-      overflow-y: visible !important;
-      word-break: break-word !important;
-    }
-
     /* Main chat/message containers: always full width, never clipped */
     [class*="CopilotChat"],
     [data-testid="layout-main-pane"],
@@ -988,6 +979,15 @@ ${SELECTORS.llmChatMessageClass},
     overflow-wrap: anywhere !important;
     word-break: break-word !important;
    }
+
+  [data-testid="chatOutput"] {
+    width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+    word-break: break-word !important;
+  }
 
   [class*="UserMessage"]:not([class*="UserMessage_actionBar"]),
   [data-testid="chatQuestion"], [data-testid*="UserMessage"]:not([class*="UserMessage_actionBar"]) {
