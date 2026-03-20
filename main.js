@@ -22,6 +22,7 @@ let trayImage24 = null;  // Cached icon images
 
 // --- Clipboard-based Quick Chat paste timing ---------------------------------
 // Requirement: copy selection -> open/focus Quick Chat -> wait 3s -> paste.
+const QUICK_PASTE_NEW_WINDOW_DELAY_MS = 300;
 const QUICK_PASTE_DELAY_MS = 3000; // NOTE: This is now a fallback timeout only. Primary path waits for input readiness.
 const QUICK_PASTE_POST_KEY_DELAY_MS = 40; // tiny gap between paste and optional Enter
 
@@ -208,10 +209,12 @@ async function scheduleQuickPaste(wc, { autoSubmit = false } = {}) {
   // Primary: wait for UI readiness
   const ready = await waitForChatInput(wc, 4000);
   if (ready) {
-    const pasted = sendPasteKeystroke(wc);
-    if (autoSubmit && pasted) {
-      setTimeout(() => sendEnterKeystroke(wc), QUICK_PASTE_POST_KEY_DELAY_MS);
-    }
+    setTimeout(() => {
+      const pasted = sendPasteKeystroke(wc);
+      if (autoSubmit && pasted) {
+        setTimeout(() => sendEnterKeystroke(wc), QUICK_PASTE_POST_KEY_DELAY_MS);
+      }
+    }, QUICK_PASTE_NEW_WINDOW_DELAY_MS);
     return;
   }
 
@@ -1841,11 +1844,11 @@ async function sendSelectionToQuick(sourceWin, opts) {
       scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
     });
     } else {
-    // Dynamic wait + paste immediately if already ready
-    scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
+      // Dynamic wait + paste immediately if already ready
+      scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
     }
   } catch {
-    scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
+      scheduleQuickPaste(wc, { autoSubmit: !!envelope.autoSubmit }).catch(() => {});
   }
 }
 
@@ -1878,7 +1881,16 @@ function buildSendToQuickSubmenu(sourceWin, optsBase) {
 
   items.push({ type: 'separator' });
   items.push({ label: 'Choose…', click: async () => sendSelectionToSpecificQuickViaDialog(sourceWin, optsBase) });
-  items.push({ label: 'New Quick Chat Window', click: () => reveal(createQuickChatWindow()) });
+  items.push({
+    label: 'New Quick Chat Window',
+    click: async () => {
+      const w = createQuickChatWindow();
+      // Ensure we target the freshly created window so sendSelectionToQuick()
+      // performs clipboard write + reveal + paste scheduling.
+      await sendSelectionToQuick(sourceWin, { ...optsBase, targetQuickId: w?.__quickId ?? null });
+    }
+  });
+//  items.push({ label: 'New Quick Chat Window', click: () => reveal(createQuickChatWindow()) });
   return items;
 }
 
