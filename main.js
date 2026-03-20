@@ -580,26 +580,13 @@ const SELECTORS = {
 
 // --- Centralized ignore list: ALWAYS excluded from layout adjustments ---
 const IGNORE_SELECTORS = [
-  `rich-textarea`,
-  `rich-textarea .ql-editor[contenteditable=\"true\"]`,
-  `.text-input-field_textarea .ql-editor[contenteditable=\"true\"]`,
-  `.ql-editor[contenteditable=\"true\"]`,
-  `div[contenteditable=\"true\"][role=\"textbox\"]`,
-  `textarea`,
-  `input`,
-  `[contenteditable=\"true\"]`,
   `div[role=\"textbox\"]`,
   `[class*="Drawer" i]`,
-  `[class*="chatinput" i]`,
-  `[id*="ChatInput" i]`,
-  `[class*="chat-input" i]`,
-  `[id*="chat-input" i]`,
   `[class*="button" i]`,
   `[type*="button" i]` ,
   `[role="button" i]` ,
   `[class*="Menu" i]`,
   `[class*="MessageBar" i]`,
-  `[class*="editorinput" i]` ,
   `[role="status"]`,
   `[role*="tooltip"]`,
   `[class*="tooltip" i]`,
@@ -615,14 +602,29 @@ const IGNORE_SELECTORS = [
   `[class*="floatingToolbar" i]` ,
   `[class*="flyout" i]` ,
   `[class*="contextualMenu" i]` ,
-  `[class*="usermessage" i]` ,
-  `[id*="user-message"]` ,
   `[id*="toggle-work"]` ,
   `[id*="toggle-web"]` ,
   `[class*="actionsContainer"]` 
 ];
 const IGNORE_JOINED = IGNORE_SELECTORS.join(', ');
-
+/*
+Removed the following from the IGNORE List above
+  `rich-textarea`,
+  `rich-textarea .ql-editor[contenteditable=\"true\"]`,
+  `.text-input-field_textarea .ql-editor[contenteditable=\"true\"]`,
+  `.ql-editor[contenteditable=\"true\"]`,
+  `div[contenteditable=\"true\"][role=\"textbox\"]`,
+  `textarea`,
+  `input`,
+  `[contenteditable=\"true\"]`,
+  `[class*="chatinput" i]`,
+  `[id*="ChatInput" i]`,
+  `[class*="chat-input" i]`,
+  `[id*="chat-input" i]`,
+  `[class*="editorinput" i]` ,
+  `[class*="usermessage" i]` ,
+  `[id*="user-message"]` ,
+*/
 
 function applyDynamicWidth(win) {
   if (!win) return;
@@ -775,22 +777,8 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
       padding: initial !important;
       padding-left: 1px !important;
     }
-    
-    ${CHAT_SCOPE_PSEUDO} rich-textarea .ql-editor[contenteditable="true"], 
-    ${CHAT_SCOPE_PSEUDO} .text-input-field_textarea .ql-editor[contenteditable="true"], 
-    ${CHAT_SCOPE_PSEUDO} .ql-editor[contenteditable="true"], 
-    ${CHAT_SCOPE_PSEUDO} div[contenteditable="true"][role="textbox"], 
-    ${CHAT_SCOPE_PSEUDO} textarea, 
-    ${CHAT_SCOPE_PSEUDO} input {
-      pointer-events: auto !important;
-      user-select: text !important;
-      -webkit-user-select: text !important;
-      cursor: text !important;
-      opacity: 1 !important;
-      z-index: 9999 !important;
-    }
 
-${SELECTORS.llmChatMessageClass},
+    ${SELECTORS.llmChatMessageClass},
     ${SELECTORS.chatMessageContainerId},
     ${SELECTORS.llmChatMessageTestId},
     ${SELECTORS.copilotMessageTestId} {
@@ -948,12 +936,12 @@ ${SELECTORS.llmChatMessageClass},
       word-break: break-word !important;
     }
 
-  [data-testid="chat-history-search-input"] {
-    width: 2000ch !important;
-    max-width: 100% !important;
-  }
+    [data-testid="chat-history-search-input"] {
+      width: 2000ch !important;
+      max-width: 100% !important;
+    }
 
-  [class*="tooltip" i] {
+    [class*="tooltip" i] {
       width: auto !important;
       max-width: none !important;
       margin: initial !important;
@@ -967,45 +955,45 @@ ${SELECTORS.llmChatMessageClass},
       place-self: initial !important;
     }
 
-  [class*="tooltip" i],
-  [class*="fui-Tab__content"],
-  [id="toggle-work"],
-  [id="toggle-web"]  {
-    display: inline-block !important;   /* Allows width to fit content */
-    width: fit-content !important;      /* Shrinks to text width */
-    height: fit-content !important;     /* Shrinks to text height */
-    padding: 0 !important;              /* Optional: remove extra space */
-    margin: 0 !important;               /* Optional: remove extra space */
-    overflow-wrap: anywhere !important;
-    word-break: break-word !important;
-   }
+    [class*="tooltip" i],
+    [class*="fui-Tab__content"],
+    [id="toggle-work"],
+    [id="toggle-web"]  {
+      display: inline-block !important;   /* Allows width to fit content */
+      width: fit-content !important;      /* Shrinks to text width */
+      height: fit-content !important;     /* Shrinks to text height */
+      padding: 0 !important;              /* Optional: remove extra space */
+      margin: 0 !important;               /* Optional: remove extra space */
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+     }
 
-  [data-testid="chatOutput"] {
-    width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-    overflow-x: visible !important;
-    overflow-y: visible !important;
-    word-break: break-word !important;
-  }
+    [data-testid="chatOutput"] {
+      width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
+      overflow-x: visible !important;
+      overflow-y: visible !important;
+      word-break: break-word !important;
+    }
 
-  [class*="UserMessage"]:not([class*="UserMessage_actionBar"]),
-  [data-testid="chatQuestion"], [data-testid*="UserMessage"]:not([class*="UserMessage_actionBar"]) {
-    max-width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
-    width: auto !important;
-    box-sizing: content-box !important;
-    margin-left: auto !important;
-    margin-right: 0 !important;
-    padding-left: auto !important;
-    padding-right: 0 !important;
-    align-self: flex-end !important;
-    justify-self: end !important;
-    place-self: end !important;
-    display: block !important;
-    overflow-wrap: anywhere !important;
-    word-break: break-word !important;
-    white-space: pre-wrap !important;
-  }
+    [class*="UserMessage"]:not([class*="UserMessage_actionBar"]),
+    [data-testid="chatQuestion"], [data-testid*="UserMessage"]:not([class*="UserMessage_actionBar"]) {
+      max-width: min(min(var(--copilot-vw, ${VW_SIZE}vw), 91vw), ${MAX_CHARS}ch) !important;
+      width: auto !important;
+      box-sizing: content-box !important;
+      margin-left: auto !important;
+      margin-right: 0 !important;
+      padding-left: auto !important;
+      padding-right: 0 !important;
+      align-self: flex-end !important;
+      justify-self: end !important;
+      place-self: end !important;
+      display: block !important;
+      overflow-wrap: anywhere !important;
+      word-break: break-word !important;
+      white-space: pre-wrap !important;
+    }
 
     /* Tables: auto layout & full width to reduce clipping overflow */
     ${SELECTORS.feedContainer} table {
