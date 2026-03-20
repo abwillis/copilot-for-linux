@@ -384,6 +384,15 @@ function createQuickChatWindow() {
       },
       { type: 'separator' },
       {
+       label: 'New Quick Chat Window',
+       accelerator: 'Ctrl+Alt+N',
+       click: () => {
+        try { reveal(createQuickChatWindow()); }
+        catch (e) { console.error('New Quick Chat (context) failed:', e); }
+       }
+      },
+      { type: 'separator' },
+      {
         label: 'Select Chat Pane',
         accelerator: 'Ctrl+Shift+A',
         enabled: true,
@@ -2696,6 +2705,15 @@ function createWindow() {
  {
   label: 'Send & Auto‑Submit to Quick Chat',
   submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.PLAIN, autoSubmit: true })
+ },
+ { type: 'separator' },
+ {
+  label: 'New Quick Chat Window',
+  accelerator: 'Ctrl+Alt+N',
+  click: () => {
+   try { reveal(createQuickChatWindow()); }
+   catch (e) { console.error('New Quick Chat (context) failed:', e); }
+  }
  },
  { type: 'separator' },
  {
