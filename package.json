@@ -89,7 +89,7 @@
   },
   "license": "BSD 3-Clause License",
   "devDependencies": {
-    "electron": "^40.7.0",
+    "electron": "^41.0.4",
     "electron-builder": "^26.4.0"
   },
   "dependencies": {
