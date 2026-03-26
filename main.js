@@ -354,6 +354,7 @@ const CHAT_MESSAGE_LIST_SELECTOR = CHAT_MESSAGE_LIST_SELECTORS.join(', ');
 const CHAT_MESSAGE_LIST_PSEUDO = `:is(${CHAT_MESSAGE_LIST_SELECTOR})`;
 const EXPORT_ROOT_CLASS = 'copilot-export-root';
 const EXPORT_ROOT_SELECTOR = `.${EXPORT_ROOT_CLASS}`;
+const CODE_PREVIEW_IFRAME_SELECTOR = 'iframe[id^="codePreviewIframe"], iframe[id*="codePreviewIframe"]';
 
 // Shared cleanup selectors for exported/copied content.
 const DOM_CLEANUP_SELECTORS = [
@@ -900,6 +901,22 @@ function buildMaxLayoutCSS({ specificMessageId } = {}) {
   ].filter(Boolean).join(',\n');
 
   return String.raw`
+
+    /* Copilot code preview iframes use ids like codePreviewIframe2, codePreviewIframe4, ... */
+    ${CODE_PREVIEW_IFRAME_SELECTOR} {
+      display: block !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+      /* JS will set the real height from the iframe document; keep a sane floor here. */
+      min-height: 333px !important;
+      height: auto !important;
+      border: 0 !important;
+      position: relative !important;
+      z-index: 2 !important;
+      box-sizing: border-box !important;
+      overflow: visible !important;
+    }
 
     /* Root var for dynamic target width; default 90vw */
     html { --copilot-vw: ${VW_SIZE}vw; }
