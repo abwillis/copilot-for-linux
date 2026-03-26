@@ -285,15 +285,7 @@ function createQuickChatWindow() {
   activeQuickChatId = id;
 
   win.setMenuBarVisibility(true);
-
-  win.on('close', (e) => {
-    try { scheduleSaveWindowState(win, boundsKey); } catch {}
-    if (!isQuitting) {
-      e.preventDefault();
-      win.hide();
-    }
-  });
-
+  attachWindowStatePersistence(win, boundsKey, { hideOnClose: true });
   win.on('focus', () => onQuickFocus(win));
   win.on('closed', () => onQuickClosed(win));
   win.webContents.on('destroyed', () => {
@@ -302,191 +294,29 @@ function createQuickChatWindow() {
       delete win.webContents.__hasDidStopLoadingHandler;
     } catch {}
   });
-  win.on('resize', () => scheduleSaveWindowState(win, boundsKey));
-  win.on('move', () => scheduleSaveWindowState(win, boundsKey));
-
   ensureDidStopLoadingHandler(win.webContents);
 
   // Allow Electron's internal executeJavaScript() listeners
   // without triggering false-positive leak warnings
   win.webContents.setMaxListeners(0);
   win.loadURL(COPILOT_URL);
-
- // Defer heavy layout CSS until after first paint to reduce initial layout thrash
- try {
-  win.webContents.once('did-stop-loading', () => {
-   // Next tick ensures Chromium has painted once
-   setTimeout(() => {
-    try { applyMaxLayoutCSS(win); }
-    catch (e) { console.error('applyMaxLayoutCSS (quick deferred) failed:', e); }
-   }, 0);
-  });
- } catch (e) {
-  console.error('applyMaxLayoutCSS quick defer wiring failed:', e);
- }
-
-  win.once('ready-to-show', () => {
-    reveal(win);
- //   try { applyDynamicWidth(win); } catch {}
-    try { attachVWResize(win); } catch {}
- //   try { requestExpandedLayout(win); } catch {}
-  });
-
+  attachCSSAndLayoutHandlers(win, { role: 'quick', revealOnReady: true });
   win.webContents.on('did-start-navigation', () => {
-  //  try { attachVWResize(win); } catch {}
+    //  try { attachVWResize(win); } catch {}
   });
 
-
-  // --- Right-click native context menu (same as Main Chat) ---
   win.webContents.on('context-menu', (_event, params) => {
-    // params: { isEditable, selectionText, selectionTextIsEditable, mediaType, linkURL, inputFieldType, x, y, ... }
-    const isEditable = !!params.isEditable;
-    const hasSelection = !!params.selectionText && params.selectionText.length > 0;
-
-    // Always offer at least a minimal fallback menu so users are not left without options
-    const minimalTemplate = [
-      { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
-      { type: 'separator' },
-      {
-        label: 'Inspect Element',
-        accelerator: 'Ctrl+Shift+C',
-        click: () => {
-          try {
-            win.webContents.inspectElement(params.x, params.y);
-            if (!win.webContents.isDevToolsOpened()) {
-              win.webContents.openDevTools({ mode: 'right' });
-            }
-          } catch (err) {
-            console.error('Inspect failed:', err);
-          }
-        }
-      }
-    ];
-
-    const template = [
-      { role: 'cut', accelerator: 'Ctrl+X', enabled: isEditable },
-      { role: 'copy', accelerator: 'Ctrl+C', enabled: (hasSelection || isEditable) },
-      { role: 'paste', accelerator: 'Ctrl+V', enabled: isEditable },
-      { type: 'separator' },
-      { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
-      { type: 'separator' },
-      {
-        label: 'Send to Quick Chat',
-        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: false })
-      },
-      {
-        label: 'Send as Quote to Quick Chat',
-        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.QUOTE, autoSubmit: false })
-      },
-      {
-        label: 'Send & Auto-Submit to Quick Chat',
-        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: true })
-      },
-      { type: 'separator' },
-      {
-       label: 'New Quick Chat Window',
-       accelerator: 'Ctrl+Alt+N',
-       click: () => {
-        try { reveal(createQuickChatWindow()); }
-        catch (e) { console.error('New Quick Chat (context) failed:', e); }
-       }
-      },
-      { type: 'separator' },
-      {
-        label: 'Select Chat Pane',
-        accelerator: 'Ctrl+Shift+A',
-        enabled: true,
-        click: async () => {
-          try {
-            const res = await selectChatPane(win);
-            if (!res?.ok) {
-              try { dialog.showErrorBox('Select Chat Pane', 'Could not select the chat pane.'); } catch {}
-            }
-          } catch (err) {
-            console.error('Select Chat Pane failed:', err);
-            try { dialog.showErrorBox('Select Chat Pane failed', String(err?.message ?? err)); } catch {}
-          }
-        }
-      },
-      {
-        label: 'Save Chat Pane…',
-        click: async () => {
-          await promptSaveChatPane(win);
-        }
-      },
-      { type: 'separator' },
-      {
-        label: 'Copy Selection as Markdown',
-        accelerator: 'Ctrl+Shift+M',
-        enabled: hasSelection,
-        click: async () => {
-          try {
-            const { hasSelection: ok, html, text } = await getSelectionFragment(win);
-            if (!ok) return;
-            const md = htmlToMarkdown(html || text);
-            clipboard.writeText(md);
-          } catch (err) {
-            console.error('Copy Selection as Markdown failed:', err);
-          }
-        }
-      },
-      {
-        label: 'Save Selection as Markdown…',
-        enabled: hasSelection,
-        click: async () => {
-          await saveSelectionAsMarkdown(win);
-        }
-      },
-      {
-        label: 'Save Selection as Plain Text…',
-        enabled: hasSelection,
-        click: async () => {
-          try {
-            const { hasSelection: ok, html, text } = await getSelectionFragment(win);
-            if (!ok) {
-              try { dialog.showErrorBox('Save Selection as Text', 'No selection found.'); } catch {}
-              return;
-            }
-            const safeHtml = stripExecutableBlocks(decodeEntities(html || text));
-            let plain = stripTags(safeHtml)
-              .replace(/[ 	]+\n/g, '\n')
-              .replace(/\n{3,}/g, '\n\n')
-              .trim();
-            const { filePath, canceled } = await dialog.showSaveDialog(win, {
-              title: 'Save Selection as Plain Text',
-              defaultPath: 'selection.txt',
-              filters: [{ name: 'Plain Text', extensions: ['txt'] }]
-            });
-            if (canceled || !filePath) return;
-            await fs.promises.writeFile(filePath, plain, 'utf8');
-          } catch (err) {
-            console.error('Save Selection as Plain Text failed:', err);
-            try { dialog.showErrorBox('Save failed', String(err?.message ?? err)); } catch {}
-          }
-        }
-      },
-      { type: 'separator' },
-      {
-        label: 'Inspect Element',
-        accelerator: 'Ctrl+Shift+C',
-        click: () => {
-          try {
-            win.webContents.inspectElement(params.x, params.y);
-            if (!win.webContents.isDevToolsOpened()) {
-              win.webContents.openDevTools({ mode: 'right' });
-            }
-          } catch (err) {
-            console.error('Inspect failed:', err);
-          }
-        }
-      }
-    ];
-
-    let menu;
     try {
-      menu = Menu.buildFromTemplate(template);
+      menu = Menu.buildFromTemplate(
+        buildContextMenuTemplate(win, params, {
+          includeQuickChatFeatures: true,
+          includeChatPaneFeatures: true,
+          includeMarkdownExport: true
+        })
+      );
     } catch (err) {
       console.error('Context menu template error:', err);
+      const hasSelection = !!params?.selectionText && params.selectionText.length > 0;
       menu = Menu.buildFromTemplate([{ role: 'copy', enabled: hasSelection }, { role: 'selectAll' }]);
     }
 
@@ -524,6 +354,360 @@ const CHAT_MESSAGE_LIST_SELECTOR = CHAT_MESSAGE_LIST_SELECTORS.join(', ');
 const CHAT_MESSAGE_LIST_PSEUDO = `:is(${CHAT_MESSAGE_LIST_SELECTOR})`;
 const EXPORT_ROOT_CLASS = 'copilot-export-root';
 const EXPORT_ROOT_SELECTOR = `.${EXPORT_ROOT_CLASS}`;
+
+// Shared cleanup selectors for exported/copied content.
+const DOM_CLEANUP_SELECTORS = [
+  'button',
+  '[role="button"]',
+  '[data-testid*="copy"]',
+  '[data-testid*="feedback"]',
+  '[data-testid*="thumb"]',
+  '[data-testid*="reaction"]',
+  '[data-testid*="reference"]',
+  '[data-testid*="citation"]',
+  '[class*="copy" i]',
+  '[class*="feedback" i]',
+  '[class*="toolbar" i]',
+  '[class*="action" i]',
+  '[class*="hover" i]',
+  '[class*="menu" i]',
+  '[class*="icon" i]'
+];
+
+function safeShowError(title, message) {
+  try {
+    dialog.showErrorBox(
+      String(title ?? 'Error'),
+      String(message ?? 'An error occurred')
+    );
+  } catch (err) {
+    console.error('Could not show error dialog:', err);
+  }
+}
+
+function cleanupDOMFragmentScript(containerName = 'container') {
+  const selectorsJson = JSON.stringify(DOM_CLEANUP_SELECTORS);
+  return `
+    (function() {
+      const __target = ${containerName};
+      const __selectors = ${selectorsJson};
+      if (!__target) return;
+      __target.querySelectorAll(__selectors.join(',')).forEach(el => {
+        try { el.remove(); } catch {}
+      });
+      __target.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
+        try { el.setAttribute('data-preserve', 'true'); } catch {}
+      });
+      __target.querySelectorAll('div, span').forEach(el => {
+        try {
+          if (
+            !el.textContent.trim() &&
+            !el.querySelector('[data-preserve]') &&
+            !el.querySelector('pre, code, table, ul, ol')
+          ) {
+            el.remove();
+          }
+        } catch {}
+      });
+    })();
+  `;
+}
+
+function buildChatPaneDetectionScript(options = {}) {
+  const {
+    includeHtml = false,
+    selectContent = false,
+    cleanupJunk = false,
+    scrollIntoView = false
+  } = options;
+
+  const candidatesJson = JSON.stringify(CHAT_ROOT_SELECTORS);
+  const junkSelectorsJson = cleanupJunk
+    ? JSON.stringify(DOM_CLEANUP_SELECTORS)
+    : 'null';
+
+  return `
+    (function () {
+      const candidates = ${candidatesJson};
+      const junkSelectors = ${junkSelectorsJson};
+
+      function visible(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect?.();
+        return !!r && r.width > 0 && r.height > 0;
+      }
+
+      function scoreElement(el) {
+        let score = 0;
+        try {
+          if (visible(el)) score += 1000;
+          score += (el.querySelectorAll?.('[role="article"]').length ?? 0) * 25;
+          score += (el.querySelectorAll?.('[id^="copilot-message-"]').length ?? 0) * 25;
+          score += (el.querySelectorAll?.('[role="feed"]').length ?? 0) * 50;
+          score += Math.min(String(el.innerText ?? '').length, 500);
+        } catch {}
+        return score;
+      }
+
+      const found = [];
+      for (const sel of candidates) {
+        try {
+          document.querySelectorAll(sel).forEach(el => found.push({ sel, el }));
+        } catch {}
+      }
+      if (!found.length) return null;
+
+      const scored = found.map(({ sel, el }) => ({
+        sel,
+        el,
+        score: scoreElement(el)
+      }));
+      scored.sort((a, b) => b.score - a.score);
+
+      const best = scored[0];
+      if (!best || !best.el) return null;
+
+      if (${scrollIntoView ? 'true' : 'false'}) {
+        try {
+          best.el.scrollIntoView({ block: 'start', inline: 'nearest' });
+        } catch {}
+      }
+
+      if (${selectContent ? 'true' : 'false'}) {
+        try {
+          const sel = window.getSelection?.();
+          if (sel) {
+            sel.removeAllRanges();
+            const range = document.createRange();
+            range.selectNodeContents(best.el);
+            sel.addRange(range);
+          }
+        } catch {}
+      }
+
+      let resultHtml = '';
+      if (${includeHtml ? 'true' : 'false'}) {
+        if (${cleanupJunk ? 'true' : 'false'} && junkSelectors) {
+          const clone = best.el.cloneNode(true);
+          clone.querySelectorAll(junkSelectors.join(',')).forEach(el => {
+            try { el.remove(); } catch {}
+          });
+          clone.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
+            try { el.setAttribute('data-preserve', 'true'); } catch {}
+          });
+          clone.querySelectorAll('div, span').forEach(el => {
+            try {
+              if (
+                !el.textContent.trim() &&
+                !el.querySelector('[data-preserve]') &&
+                !el.querySelector('pre, code, table, ul, ol')
+              ) {
+                el.remove();
+              }
+            } catch {}
+          });
+          resultHtml = clone.outerHTML;
+        } else {
+          resultHtml = best.el.outerHTML;
+        }
+      }
+
+      const selectedTextLength = ${selectContent ? 'String(window.getSelection?.()?.toString() ?? "").length' : '0'};
+
+      return {
+        ok: true,
+        selector: best.sel,
+        html: resultHtml,
+        textLength: String(best.el.innerText ?? '').length,
+        score: Number(best.score ?? 0),
+        selectedTextLength
+      };
+    })();
+  `;
+}
+
+function attachWindowStatePersistence(win, boundsKey, { hideOnClose = true } = {}) {
+  if (!win) return;
+  win.on('resize', () => scheduleSaveWindowState(win, boundsKey));
+  win.on('move', () => scheduleSaveWindowState(win, boundsKey));
+  win.on('close', (e) => {
+    try { scheduleSaveWindowState(win, boundsKey); } catch {}
+    if (!isQuitting && hideOnClose) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
+}
+
+function attachCSSAndLayoutHandlers(win, { role = 'window', revealOnReady = true } = {}) {
+  if (!win?.webContents) return;
+
+  ensureDidStopLoadingHandler(win.webContents);
+
+  try {
+    win.webContents.once('did-stop-loading', () => {
+      setTimeout(() => {
+        try { applyMaxLayoutCSS(win); }
+        catch (e) { console.error(`applyMaxLayoutCSS (${role}) failed:`, e); }
+      }, 0);
+    });
+  } catch (e) {
+    console.error(`applyMaxLayoutCSS ${role} defer wiring failed:`, e);
+  }
+
+  win.once('ready-to-show', () => {
+    if (revealOnReady) reveal(win);
+    try { attachVWResize(win); }
+    catch (e) { console.error(`attachVWResize (${role}) failed:`, e); }
+  });
+}
+
+function buildContextMenuTemplate(win, params, options = {}) {
+  const {
+    includeQuickChatFeatures = true,
+    includeChatPaneFeatures = true,
+    includeMarkdownExport = true
+  } = options;
+
+  const isEditable = !!params?.isEditable;
+  const hasSelection = !!params?.selectionText && params.selectionText.length > 0;
+
+  const inspectItem = {
+    label: 'Inspect Element',
+    accelerator: 'Ctrl+Shift+C',
+    click: () => {
+      try {
+        win.webContents.inspectElement(params.x, params.y);
+        if (!win.webContents.isDevToolsOpened()) {
+          win.webContents.openDevTools({ mode: 'right' });
+        }
+      } catch (err) {
+        console.error('Inspect failed:', err);
+      }
+    }
+  };
+
+  const template = [
+    { role: 'cut', accelerator: 'Ctrl+X', enabled: isEditable },
+    { role: 'copy', accelerator: 'Ctrl+C', enabled: (hasSelection || isEditable) },
+    { role: 'paste', accelerator: 'Ctrl+V', enabled: isEditable },
+    { type: 'separator' },
+    { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true }
+  ];
+
+  if (includeQuickChatFeatures) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Send to Quick Chat',
+        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: false })
+      },
+      {
+        label: 'Send as Quote to Quick Chat',
+        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.QUOTE, autoSubmit: false })
+      },
+      {
+        label: 'Send & Auto‑Submit to Quick Chat',
+        submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: true })
+      },
+      { type: 'separator' },
+      {
+        label: 'New Quick Chat Window',
+        accelerator: 'Ctrl+Alt+N',
+        click: () => {
+          try { reveal(createQuickChatWindow()); }
+          catch (e) { console.error('New Quick Chat (context) failed:', e); }
+        }
+      }
+    );
+  }
+
+  if (includeChatPaneFeatures) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Select Chat Pane',
+        accelerator: 'Ctrl+Shift+A',
+        enabled: true,
+        click: async () => {
+          try {
+            const res = await selectChatPane(win);
+            if (!res?.ok) safeShowError('Select Chat Pane', 'Could not select the chat pane.');
+          } catch (err) {
+            console.error('Select Chat Pane failed:', err);
+            safeShowError('Select Chat Pane failed', String(err?.message ?? err));
+          }
+        }
+      },
+      {
+        label: 'Save Chat Pane…',
+        click: async () => {
+          await promptSaveChatPane(win);
+        }
+      }
+    );
+  }
+
+  if (includeMarkdownExport) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Copy Selection as Markdown',
+        accelerator: 'Ctrl+Shift+M',
+        enabled: hasSelection,
+        click: async () => {
+          try {
+            const { hasSelection: ok, html, text } = await getSelectionFragment(win);
+            if (!ok) return;
+            const md = htmlToMarkdown(html || text);
+            clipboard.writeText(md);
+          } catch (err) {
+            console.error('Copy Selection as Markdown failed:', err);
+          }
+        }
+      },
+      {
+        label: 'Save Selection as Markdown…',
+        enabled: hasSelection,
+        click: async () => {
+          await saveSelectionAsMarkdown(win);
+        }
+      },
+      {
+        label: 'Save Selection as Plain Text…',
+        enabled: hasSelection,
+        click: async () => {
+          try {
+            const { hasSelection: ok, html, text } = await getSelectionFragment(win);
+            if (!ok) {
+              safeShowError('Save Selection as Text', 'No selection found.');
+              return;
+            }
+            const safeHtml = stripExecutableBlocks(decodeEntities(html || text));
+            let plain = stripTags(safeHtml)
+              .replace(/[ \t]+\n/g, '\n')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+            const { filePath, canceled } = await dialog.showSaveDialog(win, {
+              title: 'Save Selection as Plain Text',
+              defaultPath: 'selection.txt',
+              filters: [{ name: 'Plain Text', extensions: ['txt'] }]
+            });
+            if (canceled || !filePath) return;
+            await fs.promises.writeFile(filePath, plain, 'utf8');
+          } catch (err) {
+            console.error('Save Selection as Plain Text failed:', err);
+            safeShowError('Save failed', String(err?.message ?? err));
+          }
+        }
+      }
+    );
+  }
+
+  template.push({ type: 'separator' }, inspectItem);
+  return template;
+}
+
 // Parameterized single-message selector
 const messageContentById = (id) => `${CHAT_SCOPE_PSEUDO} #${id}, ${CHAT_MESSAGE_LIST_PSEUDO} #${id}, [id="${id}"]`; 
 
@@ -1542,53 +1726,6 @@ function ensureSaveState(win) {
   if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
 }
 
-function buildLocateChatRootScript({ includeHtml = true } = {}) {
-  const selectorsJson = JSON.stringify(CHAT_ROOT_SELECTORS);
-  const includeHtmlLiteral = includeHtml ? 'true' : 'false';
-  return `
-  (function () {
-    const candidates = ${selectorsJson};
-    function visible(el) {
-      if (!el) return false;
-      const r = el.getBoundingClientRect?.();
-      return !!r && r.width > 0 && r.height > 0;
-    }
- 
-    const found = [];
-    for (const sel of candidates) {
-      try {
-        document.querySelectorAll(sel).forEach(el => found.push({ sel, el }));
-      } catch {}
-    }
- 
-    if (!found.length) return null;
- 
-    const scored = found.map(({ sel, el }) => {
-      let score = 0;
-      try {
-        if (visible(el)) score += 1000;
-        score += (el.querySelectorAll?.('[role="article"]').length ?? 0) * 25;
-        score += (el.querySelectorAll?.('[id^="copilot-message-"]').length ?? 0) * 25;
-        score += (el.querySelectorAll?.('[role="feed"]').length ?? 0) * 50;
-        score += Math.min(String(el.innerText || '').length, 500);
-      } catch {}
-      return { sel, el, score };
-    });
- 
-    scored.sort((a, b) => b.score - a.score);
-    const best = scored[0];
-    if (!best || !best.el) return null;
- 
-    return {
-      selector: best.sel,
-      html: ${includeHtmlLiteral} ? best.el.outerHTML : '',
-      textLength: String(best.el.innerText || '').length,
-      score: Number(best.score || 0)
-    };
-  })();
-  `;
- }
- 
 async function executeInAllFrames(win, source) {
   if (!win?.webContents) return [];
   const results = [];
@@ -1610,7 +1747,10 @@ async function executeInAllFrames(win, source) {
  }
  
  async function findBestChatRoot(win, { includeHtml = true } = {}) {
-  const results = await executeInAllFrames(win, buildLocateChatRootScript({ includeHtml }));
+  const results = await executeInAllFrames(
+    win,
+    buildChatPaneDetectionScript({ includeHtml })
+  );
   if (!results.length) return null;
  
   results.sort((a, b) => {
@@ -1641,58 +1781,10 @@ async function executeInAllFrames(win, source) {
 // ---------- Chat pane selection helper ----------
 // Select the entire chat pane content in the renderer and return selection stats
 async function selectChatPane(win) {
- const js = `
- (function () {
-   const candidates = ${JSON.stringify(CHAT_ROOT_SELECTORS)};
-
-   function visible(el) {
-     if (!el) return false;
-     const r = el.getBoundingClientRect?.();
-     return !!r && r.width > 0 && r.height > 0;
-   }
-
-   let best = null;
-   let bestScore = -1;
-
-   for (const sel of candidates) {
-     let nodes = [];
-     try { nodes = Array.from(document.querySelectorAll(sel)); } catch {}
-     for (const el of nodes) {
-       let score = 0;
-       try {
-         if (visible(el)) score += 1000;
-         score += (el.querySelectorAll?.('[role="article"]').length ?? 0) * 25;
-         score += (el.querySelectorAll?.('[id^="copilot-message-"]').length ?? 0) * 25;
-         score += (el.querySelectorAll?.('[role="feed"]').length ?? 0) * 50;
-         score += Math.min(String(el.innerText || '').length, 500);
-       } catch {}
-       if (score > bestScore) {
-         best = el;
-         bestScore = score;
-       }
-     }
-   }
-
-   if (!best) return { ok: false, selectedTextLength: 0 };
-
-   try { best.scrollIntoView({ block: 'start', inline: 'nearest' }); } catch {}
-
-   const sel = window.getSelection?.();
-   if (!sel) return { ok: false, selectedTextLength: 0 };
-
-   sel.removeAllRanges();
-   const range = document.createRange();
-   range.selectNodeContents(best);
-   sel.addRange(range);
-
-   const txt = String(sel.toString() || '');
-   return {
-     ok: !!txt.length,
-     selectedTextLength: txt.length
-   };
- })();
- `;
-
+ const js = buildChatPaneDetectionScript({
+   selectContent: true,
+   scrollIntoView: true
+ });
  const results = await executeInAllFrames(win, js);
  const success = results
    .map(r => r.value)
@@ -1717,57 +1809,9 @@ async function getSelectionFragment(win) {
   const range = sel.getRangeAt(0);
   const container = document.createElement('div');
   container.appendChild(range.cloneContents());
-
-  // -------------------------------
-  // DOM CLEANUP (Copilot-specific)
-  // -------------------------------
-
-  // Known non-content UI affordances:
-  // copy buttons, feedback icons, toolbars, hover menus, references
-  const JUNK_SELECTORS = [
-   'button',
-   '[role="button"]',
-   '[data-testid*="copy"]',
-   '[data-testid*="feedback"]',
-   '[data-testid*="thumb"]',
-   '[data-testid*="reaction"]',
-   '[data-testid*="reference"]',
-   '[data-testid*="citation"]',
-   '[class*="copy" i]',
-   '[class*="feedback" i]',
-   '[class*="toolbar" i]',
-   '[class*="action" i]',
-   '[class*="hover" i]',
-   '[class*="menu" i]',
-   '[class*="icon" i]'
-  ];
-
-  container.querySelectorAll(JUNK_SELECTORS.join(',')).forEach(el => {
-   try { el.remove(); } catch {}
-  });
-
-  // Preserve semantic blocks explicitly (never strip their parents)
-  container.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
-   try { el.setAttribute('data-preserve', 'true'); } catch {}
-  });
-
-  // Remove empty wrapper nodes that add no content,
-  // but do NOT touch semantic structures
-  container.querySelectorAll('div, span').forEach(el => {
-   try {
-    if (
-     !el.textContent.trim() &&
-     !el.querySelector('[data-preserve]') &&
-     !el.querySelector('pre, code, table, ul, ol')
-    ) {
-     el.remove();
-    }
-   } catch {}
-  });
-
+  ${cleanupDOMFragmentScript('container')}
   const html = container.innerHTML;
   const text = String(sel.toString() || '');
-
   return { hasSelection: true, html, text };
  })();
  `).catch(() => ({ hasSelection: false, html: "", text: "" }));
@@ -2338,65 +2382,15 @@ async function promptSaveChatPane(win) {
 async function saveChatPaneAsMarkdown(win, filePath) {
   if (!win) return;
   try {
-    const snapshot = await getChatPaneSnapshot(win);
+    const snapshot = await getBestChatRootCleaned(win);
     if (!snapshot?.ok) {
-      try { dialog.showErrorBox('Save Chat Pane as Markdown', 'Chat pane not found.'); } catch {}
-      return;
-    }
-    const result = await win.webContents.executeJavaScript(`
-    (function() {
-      const holder = document.createElement('div');
-      holder.innerHTML = ${JSON.stringify(String(snapshot.html || ''))};
-      const clone = holder.firstElementChild || holder;
-      const JUNK_SELECTORS = [
-        'button',
-        '[role="button"]',
-        '[data-testid*="copy"]',
-        '[data-testid*="feedback"]',
-        '[data-testid*="thumb"]',
-        '[data-testid*="reaction"]',
-        '[data-testid*="reference"]',
-        '[data-testid*="citation"]',
-        '[class*="copy" i]',
-        '[class*="feedback" i]',
-        '[class*="toolbar" i]',
-        '[class*="action" i]',
-        '[class*="hover" i]',
-        '[class*="menu" i]',
-        '[class*="icon" i]'
-      ];
-      clone.querySelectorAll(JUNK_SELECTORS.join(',')).forEach(el => {
-        try { el.remove(); } catch {}
-      });
-      clone.querySelectorAll('pre, code, table, ul, ol').forEach(el => {
-        try { el.setAttribute('data-preserve', 'true'); } catch {}
-      });
-      clone.querySelectorAll('div, span').forEach(el => {
-        try {
-          if (
-            !el.textContent.trim() &&
-            !el.querySelector('[data-preserve]') &&
-            !el.querySelector('pre, code, table, ul, ol')
-          ) {
-            el.remove();
-          }
-        } catch {}
-      });
-      return {
-        ok: true,
-        html: clone.innerHTML,
-        title: document.title
-      };
-    })();
-    `)
-    if (!result?.ok) {
-      try { dialog.showErrorBox('Save Chat Pane as Markdown', 'Chat pane not found.'); } catch {}
+      safeShowError('Save Chat Pane as Markdown', 'Chat pane not found.');
       return;
     }
 
     // Convert cleaned semantic HTML → Markdown
     // (No entity decoding; structure already preserved)
-    const paneHtml = String(result.html || '');
+    const paneHtml = String(snapshot.html ?? '');
 
     // IMPORTANT:
     // Copilot renders diff lines as separate block elements (div/span)
@@ -2408,8 +2402,23 @@ async function saveChatPaneAsMarkdown(win, filePath) {
     await fs.promises.writeFile(filePath, md, 'utf8');
   } catch (err) {
     console.error('Save Chat Pane as Markdown failed:', err);
-    try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
+    safeShowError('Save failed', String(err?.message ?? err));
   }
+}
+
+async function getBestChatRootCleaned(win) {
+  const results = await executeInAllFrames(
+    win,
+    buildChatPaneDetectionScript({
+      includeHtml: true,
+      cleanupJunk: true
+    })
+  );
+  const best = results
+    .map(r => r.value)
+    .filter(v => v?.ok)
+    .sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0))[0];
+  return best ?? { ok: false, html: '', textLength: 0, selector: null };
 }
 
 async function saveChatPaneAsText(win, filePath) {
@@ -2574,13 +2583,16 @@ function createWindow() {
   ]);
 
   function popupContext(win, params) {
-    const menu = Menu.buildFromTemplate([
-      { role: 'cut',        accelerator: 'Ctrl+X', enabled: !!params?.isEditable },
-      { role: 'copy',       accelerator: 'Ctrl+C', enabled: !!(params?.hasSelection || params?.isEditable) },
-      { role: 'paste',      accelerator: 'Ctrl+V', enabled: !!params?.isEditable },
-      { type: 'separator' },
-      { role: 'selectAll',  accelerator: 'Ctrl+A', enabled: true  },
-    ]);
+    const menu = Menu.buildFromTemplate(
+      buildContextMenuTemplate(win, {
+        ...params,
+        selectionText: params?.selectionText ?? (params?.hasSelection ? 'x' : '')
+      }, {
+        includeQuickChatFeatures: false,
+        includeChatPaneFeatures: false,
+        includeMarkdownExport: false
+      })
+    );
     menu.popup({ window: win });
   }
 
@@ -2619,28 +2631,12 @@ function createWindow() {
 
   mainWindow.loadURL(COPILOT_URL); // Load your app
 
-  // Defer heavy layout CSS until after first paint to reduce initial layout thrash
-  try {
-    mainWindow.webContents.once('did-stop-loading', () => {
-      // Next tick ensures Chromium has painted once
-      setTimeout(() => {
-        try { applyMaxLayoutCSS(mainWindow); }
-        catch (e) { console.error('applyMaxLayoutCSS (deferred) failed:', e); }
-      }, 0);
-    });
-  } catch (e) {
-    console.error('applyMaxLayoutCSS defer wiring failed:', e);
-  }
-
-//  try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
-  try { attachVWResize(mainWindow); } catch (e) { console.error('attachVWResize failed:', e); }
-//  try { requestExpandedLayout(mainWindow); } catch (e) { console.error('requestExpandedLayout (outer) failed:', e); }
-
-  // Build native context menu purely from main, based on Chromium's params
+  attachCSSAndLayoutHandlers(mainWindow, { role: 'main', revealOnReady: false });
+  // try { applyDynamicWidth(mainWindow); } catch (e) { console.error('applyDynamicWidth failed:', e); }
 
   // Keep the 'did-stop-loading' handler singular when SPA navigations occur.
   mainWindow.webContents.on('did-start-navigation', () => {
- //   try { attachVWResize(mainWindow); } catch {}
+  //   try { attachVWResize(mainWindow); } catch {}
   });
   mainWindow.webContents.on('destroyed', () => {
     try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading);
@@ -2651,159 +2647,18 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('context-menu', (_event, params) => {
-    // params: { isEditable, selectionText, selectionTextIsEditable, mediaType, linkURL, inputFieldType, x, y, ... }
-    const isEditable = !!params.isEditable;
-    const hasSelection = !!params.selectionText && params.selectionText.length > 0;
-
-    // Always offer at least a minimal fallback menu so users are not left without options
-    const minimalTemplate = [
-      { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
-      { type: 'separator' },
-      {
-        label: 'Inspect Element',
-        accelerator: 'Ctrl+Shift+C',
-        click: () => {
-          try {
-            mainWindow.webContents.inspectElement(params.x, params.y);
-            if (!mainWindow.webContents.isDevToolsOpened()) {
-              mainWindow.webContents.openDevTools({ mode: 'right' });
-            }
-          } catch (err) {
-            console.error('Inspect failed:', err);
-          }
-        }
-      }
-    ];
-
-    const template = [
-      { role: 'cut',   accelerator: 'Ctrl+X', enabled: isEditable },
-      { role: 'copy',  accelerator: 'Ctrl+C', enabled: (hasSelection || isEditable) },
-      { role: 'paste', accelerator: 'Ctrl+V', enabled: isEditable },
-      { type: 'separator' },
-      { role: 'selectAll', accelerator: 'Ctrl+A', enabled: true },
- { type: 'separator' },
- {
-  label: 'Send to Quick Chat',
-  submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.PLAIN, autoSubmit: false })
- },
- {
-  label: 'Send as Quote to Quick Chat',
-  submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.QUOTE, autoSubmit: false })
- },
- {
-  label: 'Send & Auto‑Submit to Quick Chat',
-  submenu: buildSendToQuickSubmenu(mainWindow, { mode: SEND_MODE.PLAIN, autoSubmit: true })
- },
- { type: 'separator' },
- {
-  label: 'New Quick Chat Window',
-  accelerator: 'Ctrl+Alt+N',
-  click: () => {
-   try { reveal(createQuickChatWindow()); }
-   catch (e) { console.error('New Quick Chat (context) failed:', e); }
-  }
- },
- { type: 'separator' },
- {
-  label: 'Select Chat Pane',
-        accelerator: 'Ctrl+Shift+A',
-        enabled: true, // ✅ Always enabled regardless of selection
-        click: async () => {
-          try {
-            const res = await selectChatPane(mainWindow);
-            if (!res?.ok) {
-              try { dialog.showErrorBox('Select Chat Pane', 'Could not select the chat pane.'); } catch {}
-            }
-          } catch (err) {
-            console.error('Select Chat Pane failed:', err);
-            try { dialog.showErrorBox('Select Chat Pane failed', String(err?.message || err)); } catch {}
-          }
-        }
-      },
-
-      // ---- NEW: Save Chat Pane… (right-click) ----
-      {
-        label: 'Save Chat Pane…',
-        click: async () => {
-          await promptSaveChatPane(mainWindow);
-        }
-      },
-      { type: 'separator' },
-      {
-        label: 'Copy Selection as Markdown',
-        accelerator: 'Ctrl+Shift+M',
-        enabled: hasSelection,
-        click: async () => {
-          try {
-            const { hasSelection: ok, html, text } = await getSelectionFragment(mainWindow);
-            if (!ok) return;
-            const md = htmlToMarkdown(html || text);
-            clipboard.writeText(md);
-          } catch (err) {
-            console.error('Copy Selection as Markdown failed:', err);
-          }
-        }
-      },
-      {
-        label: 'Save Selection as Markdown…',
-        enabled: hasSelection,
-        click: async () => {
-          await saveSelectionAsMarkdown(mainWindow);
-        }
-      },
-      {
-        label: 'Save Selection as Plain Text…',
-        enabled: hasSelection,
-        click: async () => {
-          try {
-            const { hasSelection: ok, html, text } = await getSelectionFragment(mainWindow);
-            if (!ok) {
-              try { dialog.showErrorBox('Save Selection as Text', 'No selection found.'); } catch {}
-              return;
-            }
-            const safeHtml = stripExecutableBlocks(decodeEntities(html || text));
-            let plain = stripTags(safeHtml)
-              .replace(/[ \t]+\n/g, '\n')
-              .replace(/\n{3,}/g, '\n\n')
-              .trim();
-            const { filePath, canceled } = await dialog.showSaveDialog(mainWindow, {
-              title: 'Save Selection as Plain Text',
-              defaultPath: 'selection.txt',
-              filters: [{ name: 'Plain Text', extensions: ['txt'] }]
-            });
-            if (canceled || !filePath) return;
-            await fs.promises.writeFile(filePath, plain, 'utf8');
-          } catch (err) {
-            console.error('Save Selection as Plain Text failed:', err);
-            try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
-          }
-        }
-      },
-      { type: 'separator' },
-      {
-        label: 'Inspect Element',
-        accelerator: 'Ctrl+Shift+C',
-        click: () => {
-          try {
-            // Focus the element under the right-click position
-            mainWindow.webContents.inspectElement(params.x, params.y);
-            // Ensure DevTools is open so the Elements panel is visible
-            if (!mainWindow.webContents.isDevToolsOpened()) {
-              // Dock to the right; you can use 'bottom' or omit the mode
-              mainWindow.webContents.openDevTools({ mode: 'right' });
-            }
-          } catch (err) {
-            console.error('Inspect failed:', err);
-          }
-        }
-      }
-    ];
     try { 
-      menu = Menu.buildFromTemplate(template);
+      menu = Menu.buildFromTemplate(
+        buildContextMenuTemplate(mainWindow, params, {
+          includeQuickChatFeatures: true,
+          includeChatPaneFeatures: true,
+          includeMarkdownExport: true
+        })
+      );
     }
     catch (err) {
       console.error('Context menu template error:', err);
-      // Fallback: minimal safe menu
+      const hasSelection = !!params?.selectionText && params.selectionText.length > 0;
       menu = Menu.buildFromTemplate([{ role: 'copy', enabled: hasSelection }, { role: 'selectAll' }]);
     }
     try { menu.popup({ window: mainWindow }); }
@@ -2884,22 +2739,7 @@ function createWindow() {
       if (wc) wc.stopFindInPage('clearSelection');
     }
   });
-
-  // Persist window state on move/resize; debounce to avoid churn
-  mainWindow.on('resize', () => scheduleSaveWindowState(mainWindow, boundsKey));
-  mainWindow.on('move', () => scheduleSaveWindowState(mainWindow, boundsKey));
-  // Also persist just before quit or close (in case of no recent move/resize)
-  mainWindow.on('close', () => scheduleSaveWindowState(mainWindow, boundsKey));
-
-  // Optional: hide instead of close when user closes window
-  mainWindow.on('close', (e) => {
-    if (!isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
-    }
-  });
-
-
+  attachWindowStatePersistence(mainWindow, boundsKey, { hideOnClose: true });
   // Defensive: recreate window if it gets destroyed unexpectedly
   mainWindow.on('closed', () => {
     mainWindow = null;
