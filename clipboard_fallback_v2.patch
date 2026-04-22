@@ -1,0 +1,54 @@
+--- a/main.js
++++ b/main.js
+@@ -64,10 +64,50 @@
+     queueInject(win, envelope);
+   }
+   setTimeout(() => flushInject(win), 150);
+   setTimeout(() => flushInject(win), 500);
+ }
++
++async function clickComposerToFocus(win) {
++  try {
++    if (!win || win.isDestroyed()) return;
++    const wc = win.webContents;
++
++    // Prefer clicking the Copilot Studio iframe if present (cross-origin composer).
++    const point = await wc.executeJavaScript(`
++      (function () {
++        try {
++          const iframe =
++            document.querySelector('iframe[name="copilot-studio-iframe"]')
++            || document.querySelector('iframe#copilot-studio-iframe')
++            || document.querySelector('iframe[src*="copilotstudio.microsoft.com/embed" i]')
++            || null;
++
++          if (iframe) {
++            const r = iframe.getBoundingClientRect();
++            if (r && r.width && r.height) {
++              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), via: 'iframe' };
++            }
++          }
++        } catch {}
++
++        // Fallback: bottom-center of the viewport.
++        return { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight - 120), via: 'bottom' };
++      })();
++    `).catch(() => ({ x: 10, y: 10, via: 'fallback' }));
++
++    const x = Math.max(1, Math.floor(point?.x ?? 10));
++    const y = Math.max(1, Math.floor(point?.y ?? 10));
++
++    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
++    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
++
++    // Small delay gives the iframe a chance to move focus internally.
++    await new Promise(r => setTimeout(r, 30));
++  } catch {}
++}
++
+ 
+ // Renderer preload can notify readiness so queued envelopes flush immediately.
+ ipcMain.on('copilot:preload-ready', (event) => {
+   try {
+     const win = BrowserWindow.fromWebContents(event.sender);
+

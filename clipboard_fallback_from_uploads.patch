@@ -1,0 +1,133 @@
+--- a/main.js
++++ b/main.js
+@@ -19,16 +19,24 @@
+ const COPILOT_URL = 'https://m365.cloud.microsoft/chat';
+ 
+ const IPC = Object.freeze({
+   SEND_SELECTION: 'copilot:send-selection',
+   INJECT_ENVELOPE: 'copilot:inject-envelope',
++  INJECT_STATUS: 'copilot:inject-status',
+   QUICK_NEW: 'copilot:quick-new',
+ });
+ 
+ 
+ // --- Injection queue (preload/page readiness race protection) ---------------
+ const pendingInjectByWC = new Map(); // webContents.id -> [envelopes]
++let injectRequestCounter = 0;
++const injectStatusByRequestId = new Map(); // requestId -> { ok, ts }
++
++function nextInjectRequestId() {
++  injectRequestCounter += 1;
++  return injectRequestCounter;
++}
+ 
+ function queueInject(win, envelope) {
+   if (!win || win.isDestroyed()) return;
+   const wc = win.webContents;
+   const id = wc.id;
+@@ -65,15 +73,78 @@
+   }
+   setTimeout(() => flushInject(win), 150);
+   setTimeout(() => flushInject(win), 500);
+ }
+ 
++function clickBottomCenterToFocus(win) {
++  try {
++    if (!win || win.isDestroyed()) return;
++    const bounds = (typeof win.getContentBounds === 'function') ? win.getContentBounds() : win.getBounds();
++    const x = Math.max(1, Math.floor(bounds.width / 2));
++    const y = Math.max(1, Math.floor(bounds.height - 120));
++    const wc = win.webContents;
++    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
++    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
++  } catch {}
++}
++
++function pressEnter(win) {
++  try {
++    if (!win || win.isDestroyed()) return;
++    const wc = win.webContents;
++    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
++    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
++  } catch {}
++}
++
++function pasteEnvelopeViaClipboard(win, envelope) {
++  if (!win || win.isDestroyed()) return;
++  const text = String(envelope?.content ?? '');
++  if (!text) return;
++
++  let priorText = null;
++  try { priorText = clipboard.readText(); } catch {}
++  try { clipboard.writeText(text); } catch {}
++
++  try {
++    reveal(win);
++    win.webContents.focus();
++  } catch {}
++
++  // Focus the composer region (works even when the real input is in a cross-origin iframe).
++  clickBottomCenterToFocus(win);
++
++  // Paste into the currently-focused control.
++  try { win.webContents.paste(); } catch {}
++
++  if (envelope?.autoSubmit) {
++    setTimeout(() => pressEnter(win), 50);
++  }
++
++  // Best-effort restore clipboard shortly after.
++  if (priorText !== null) {
++    setTimeout(() => {
++      try { clipboard.writeText(priorText); } catch {}
++    }, 250);
++  }
++}
++
+ // Renderer preload can notify readiness so queued envelopes flush immediately.
+ ipcMain.on('copilot:preload-ready', (event) => {
+   try {
+     const win = BrowserWindow.fromWebContents(event.sender);
+     if (win) flushInject(win);
++  } catch {}
++});
++
++// Renderer reports whether it located an input (used to decide clipboard fallback).
++ipcMain.on(IPC.INJECT_STATUS, (_event, payload) => {
++  try {
++    const req = payload && typeof payload === 'object' ? payload : {};
++    const requestId = typeof req.requestId === 'number' ? req.requestId : null;
++    if (!requestId) return;
++    injectStatusByRequestId.set(requestId, { ok: !!req.ok, ts: Date.now() });
+   } catch {}
+ });
+ const SEND_MODE = Object.freeze({
+   PLAIN: 'plain',
+   QUOTE: 'quote',
+@@ -1359,13 +1430,24 @@
+   if (!quick || quick.isDestroyed()) return;
+ 
+   const envelope = await buildSelectionEnvelope(sourceWin, opts);
+   if (!envelope) return;
+ 
++  // Attempt renderer-side injection first (works only when the input is accessible).
+   sendInjectWhenReady(quick, envelope);
+   reveal(quick);
+-setTimeout(() => debugDumpFrames(quick), 1000);
++
++  // If the composer lives inside a cross-origin iframe (Copilot Studio embed),
++  // renderer-side DOM injection cannot reach it. Fall back to clipboard paste.
++  const requestId = envelope.requestId;
++  setTimeout(() => {
++    try {
++      const st = injectStatusByRequestId.get(requestId);
++      if (st && st.ok) return;
++      pasteEnvelopeViaClipboard(quick, envelope);
++    } catch {}
++  }, 350);
+ }
+ 
+ async function sendSelectionToSpecificQuickViaDialog(sourceWin, opts) {
+   const parent = BrowserWindow.getFocusedWindow() || mainWindow;
+   const target = await chooseQuickChatTargetDialog(parent);
+
