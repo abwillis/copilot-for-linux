@@ -40,6 +40,147 @@ const SEND_MODE = Object.freeze({
   QUOTE: 'quote',
 });
 
+// ============================================================================
+// Shift+click direct-open download support
+// ============================================================================
+const DIRECT_OPEN_REQUEST_TTL_MS = 15000;
+const directOpenRequests = new Map(); // senderWC.id -> { url, expiresAt }
+const tempOpenedFiles = new Set();    // best-effort cleanup on quit
+
+function normalizeComparableUrl(input) {
+  try {
+    const u = new URL(String(input || '').trim());
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return String(input || '').trim();
+  }
+}
+
+function sanitizeDownloadFilename(name) {
+  const raw = String(name || '').trim() || 'download';
+  const cleaned = raw
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || 'download';
+}
+
+function buildDirectOpenTempPath(filename) {
+  const safeName = sanitizeDownloadFilename(filename);
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return path.join(app.getPath('temp'), `copilot-open-${stamp}-${safeName}`);
+}
+
+function pruneExpiredDirectOpenRequests() {
+  const now = Date.now();
+  for (const [key, value] of directOpenRequests.entries()) {
+    if (!value || value.expiresAt <= now) {
+      directOpenRequests.delete(key);
+    }
+  }
+}
+
+function itemUrlMatchesDirectOpenRequest(item, request) {
+  if (!request?.url) return false;
+
+  const requested = normalizeComparableUrl(request.url);
+  const candidates = new Set();
+
+  try {
+    const current = item?.getURL?.();
+    if (current) candidates.add(normalizeComparableUrl(current));
+  } catch {}
+
+  try {
+    const chain = item?.getURLChain?.();
+    if (Array.isArray(chain)) {
+      for (const u of chain) {
+        if (u) candidates.add(normalizeComparableUrl(u));
+      }
+    }
+  } catch {}
+
+  if (candidates.has(requested)) return true;
+
+  // Redirects sometimes preserve the requested URL as a prefix/query ancestor.
+  for (const u of candidates) {
+    if (u === requested) return true;
+    if (u.startsWith(requested) || requested.startsWith(u)) return true;
+  }
+
+  return false;
+}
+
+function registerDirectOpenDownloadHandler() {
+  const ses = session.fromPartition(COPILOT_PARTITION);
+  if (!ses || ses.__copilotDirectOpenDownloadHandlerAttached) return;
+  ses.__copilotDirectOpenDownloadHandlerAttached = true;
+
+  ses.on('will-download', (event, item, webContents) => {
+    try {
+      pruneExpiredDirectOpenRequests();
+
+      const senderId = webContents?.id;
+      if (!senderId) return;
+
+      const request = directOpenRequests.get(senderId);
+      if (!request) return;
+      if (request.expiresAt <= Date.now()) {
+        directOpenRequests.delete(senderId);
+        return;
+      }
+      if (!itemUrlMatchesDirectOpenRequest(item, request)) return;
+
+      directOpenRequests.delete(senderId);
+
+      const filename =
+        sanitizeDownloadFilename(
+          item?.getFilename?.() ||
+          (() => {
+            try {
+              const u = new URL(String(request.url));
+              return path.basename(u.pathname || '') || 'download';
+            } catch {
+              return 'download';
+            }
+          })()
+        );
+
+      const tempPath = buildDirectOpenTempPath(filename);
+      tempOpenedFiles.add(tempPath);
+
+      try {
+        item.setSavePath(tempPath);
+      } catch (err) {
+        console.error('Direct-open setSavePath failed:', err);
+        tempOpenedFiles.delete(tempPath);
+        return;
+      }
+
+      item.once('done', async (_evt, state) => {
+        if (state !== 'completed') {
+          try { await fs.promises.unlink(tempPath); } catch {}
+          tempOpenedFiles.delete(tempPath);
+          return;
+        }
+
+        try {
+          const openError = await shell.openPath(tempPath);
+          if (openError) {
+            safeShowError('Open downloaded file failed', String(openError));
+          }
+        } catch (err) {
+          console.error('Direct-open shell.openPath failed:', err);
+          safeShowError('Open downloaded file failed', String(err?.message || err));
+        }
+      });
+    } catch (err) {
+      console.error('Direct-open will-download handler failed:', err);
+    }
+  });
+}
+
 function normalizeSendOptions(opts) {
   const o = (opts && typeof opts === 'object') ? opts : {};
   return {
@@ -1959,6 +2100,22 @@ ipcMain.on(IPC.SEND_SELECTION, async (event, opts) => {
   catch (e) { console.error('IPC send selection failed:', e); }
 });
 
+ipcMain.on(IPC.DIRECT_OPEN_LINK, (event, payload) => {
+  try {
+    pruneExpiredDirectOpenRequests();
+
+    const href = String(payload?.href || '').trim();
+    if (!href) return;
+
+    directOpenRequests.set(event.sender.id, {
+      url: href,
+      expiresAt: Date.now() + DIRECT_OPEN_REQUEST_TTL_MS,
+    });
+  } catch (err) {
+    console.error('IPC direct-open-link failed:', err);
+  }
+});
+
 ipcMain.on(IPC.QUICK_NEW, () => {
   try { reveal(createQuickChatWindow()); }
   catch (e) { console.error('IPC quick new failed:', e); }
@@ -2856,6 +3013,7 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  registerDirectOpenDownloadHandler();
   createWindow();
   createTray();
 //  createAppMenu();
@@ -2878,6 +3036,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   try {
+    pruneExpiredDirectOpenRequests();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.executeJavaScript(`(function(){
         try {
@@ -2895,6 +3054,12 @@ app.on('before-quit', () => {
       try { if (w && !w.isDestroyed()) w.destroy(); } catch {}
     }
   } catch {}
+   try {
+    for (const p of tempOpenedFiles) {
+      try { fs.unlinkSync(p); } catch {}
+    }
+    tempOpenedFiles.clear();
+   } catch {}
 } catch {}
 });
 

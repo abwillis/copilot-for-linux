@@ -1,0 +1,89 @@
+
+diff --git a/main.js b/main.js
+index 1111111..2222222 100644
+--- a/main.js
++++ b/main.js
+@@ -20,9 +20,10 @@ const QUICK_PASTE_POST_KEY_DELAY_MS = 40; // tiny gap between paste and optiona
+ // --- Quick Chat / IPC constants --------------------------------------------
+ const COPILOT_URL = 'https://m365.cloud.microsoft/chat';
+ const IPC = Object.freeze({
+- SEND_SELECTION: 'copilot:send-selection',
+- QUICK_NEW: 'copilot:quick-new',
++  SEND_SELECTION: 'copilot:send-selection',
++  QUICK_NEW: 'copilot:quick-new',
++  DIRECT_OPEN_LINK: 'copilot:direct-open-link',
+ });
+ const SEND_MODE = Object.freeze({
+  PLAIN: 'plain',
+  QUOTE: 'quote',
+@@ -97,6 +98,26 @@ function itemUrlMatchesDirectOpenRequest(item, request) {
+  return false;
+ }
+ function registerDirectOpenDownloadHandler() {
++ const ses = session.fromPartition(COPILOT_PARTITION);
++ if (!ses || ses.__copilotDirectOpenDownloadHandlerAttached) return;
++ ses.__copilotDirectOpenDownloadHandlerAttached = true;
++
++ // Prevent Chromium from prompting with the normal save dialog for a tagged
++ // Shift+click download. We decide the path in will-download.
++ ses.on('download-created', (_event, item, webContents) => {
++  try {
++   pruneExpiredDirectOpenRequests();
++   const senderId = webContents?.id;
++   if (!senderId) return;
++   const request = directOpenRequests.get(senderId);
++   if (!request) return;
++   if (request.expiresAt <= Date.now()) {
++    directOpenRequests.delete(senderId);
++    return;
++   }
++   if (itemUrlMatchesDirectOpenRequest(item, request) && typeof item.setSaveDialogOptions === 'function') {
++    item.setSaveDialogOptions({ defaultPath: '' });
++   }
++  } catch {}
++ });
+  const ses = session.fromPartition(COPILOT_PARTITION);
+  if (!ses || ses.__copilotDirectOpenDownloadHandlerAttached) return;
+  ses.__copilotDirectOpenDownloadHandlerAttached = true;
+@@ -116,6 +137,7 @@ function registerDirectOpenDownloadHandler() {
+      directOpenRequests.delete(senderId);
+      return;
+     }
++
+     if (!itemUrlMatchesDirectOpenRequest(item, request)) return;
+ 
+     directOpenRequests.delete(senderId);
+@@ -125,7 +147,7 @@ function registerDirectOpenDownloadHandler() {
+         item?.getFilename?.() ||
+         (() => {
+           try {
+-            const u = new URL(String(request.url));
++            const u = new URL(String(request.url || ''));
+             return path.basename(u.pathname || '') || 'download';
+           } catch {
+             return 'download';
+@@ -136,6 +158,7 @@ function registerDirectOpenDownloadHandler() {
+       const tempPath = buildDirectOpenTempPath(filename);
+       tempOpenedFiles.add(tempPath);
+ 
++      event.preventDefault?.();
+       try {
+         item.setSavePath(tempPath);
+       } catch (err) {
+@@ -148,6 +171,7 @@ function registerDirectOpenDownloadHandler() {
+           try { await fs.promises.unlink(tempPath); } catch {}
+           tempOpenedFiles.delete(tempPath);
+           return;
++          
+         }
+ 
+         try {
+@@ -160,6 +184,7 @@ function registerDirectOpenDownloadHandler() {
+         }
+       });
+     } catch (err) {
++      directOpenRequests.delete(webContents?.id);
+       console.error('Direct-open will-download handler failed:', err);
+     }
+   });
+
