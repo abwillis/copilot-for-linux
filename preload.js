@@ -5,25 +5,34 @@ const IPC = Object.freeze({
   SEND_SELECTION: 'copilot:send-selection',
   QUICK_NEW: 'copilot:quick-new',
   DIRECT_OPEN_LINK: 'copilot:direct-open-link',
+  PRELOAD_PING: 'copilot:preload-ping',
 });
+
+// Prove that the preload actually executed in the running app.
+try {
+  ipcRenderer.send(IPC.PRELOAD_PING, {
+    href: String(location.href || ''),
+    ts: Date.now(),
+  });
+} catch {}
 
 // ============================================================================
 // Host API (Quick Chat interactions are clipboard-based in main)
 // ============================================================================
-
-// Optional host API for future in-page integrations (not required by menus)
 contextBridge.exposeInMainWorld('copilotHost', {
   /**
    * Ask main process to send current selection to Quick Chat.
    * options = { mode: 'plain'|'quote', autoSubmit: boolean, targetQuickId?: number }
    */
   sendSelection(options = {}) {
-    ipcRenderer.send('copilot:send-selection', {
+    ipcRenderer.send(IPC.SEND_SELECTION, {
       mode: options.mode || 'plain',
       autoSubmit: !!options.autoSubmit,
-      targetQuickId: (typeof options.targetQuickId === 'number') ? options.targetQuickId : null
+      targetQuickId:
+        (typeof options.targetQuickId === 'number') ? options.targetQuickId : null
     });
   },
+
   /**
    * Create a new Quick Chat window.
    */
@@ -35,9 +44,6 @@ contextBridge.exposeInMainWorld('copilotHost', {
 // ============================================================================
 // Shift+click on file/download links => ask main process to auto-open the
 // resulting download from a temp file using the OS default application.
-//
-// This does NOT prevent the page's normal behavior. It only tags the next
-// matching download so main.js can redirect it to a temp path + shell.openPath().
 // ============================================================================
 function shouldIgnoreHref(href) {
   const s = String(href || '').trim();
@@ -74,9 +80,10 @@ function onShiftClickDirectOpen(event) {
 
     ipcRenderer.send(IPC.DIRECT_OPEN_LINK, {
       href: String(href),
+      ts: Date.now(),
     });
-  } catch {
-    // no-op
+  } catch (err) {
+    try { console.error('[direct-open][preload] handler failed', err); } catch {}
   }
 }
 
