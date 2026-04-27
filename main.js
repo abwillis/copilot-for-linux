@@ -260,8 +260,8 @@ function quoteify(text) {
 
 function setRoleTitle(win, role, id) {
   try {
-    if (role === 'main') win.setTitle('Copilot â€” Main Chat');
-    else win.setTitle(`Copilot â€” Quick Chat ${id}`);
+    if (role === 'main') win.setTitle('Copilot Main Chat');
+    else win.setTitle(`Copilot Quick Chat ${id}`);
   } catch {}
 }
 
@@ -432,7 +432,7 @@ async function scheduleQuickPaste(wc, { autoSubmit = false } = {}) {
 async function chooseQuickChatTargetDialog(parentWin) {
   const ids = listQuickIds();
   const buttons = ids.map(id => `Quick Chat ${id}`);
-  buttons.push('New Quick Chatâ€¦');
+  buttons.push('New Quick Chat');
   buttons.push('Cancel');
 
   const res = await dialog.showMessageBox(parentWin || mainWindow, {
@@ -464,7 +464,7 @@ function createQuickChatWindow() {
     x: typeof initialBounds.x === 'number' ? initialBounds.x : undefined,
     y: typeof initialBounds.y === 'number' ? initialBounds.y : undefined,
     show: false,
-    title: `Copilot â€” Quick Chat ${id}`,
+    title: `Copilot Quick Chat ${id}`,
     icon: appIconImage,
     webPreferences: {
       nodeIntegration: false,
@@ -810,7 +810,7 @@ function buildContextMenuTemplate(win, params, options = {}) {
         submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.QUOTE, autoSubmit: false })
       },
       {
-        label: 'Send & Autoâ€‘Submit to Quick Chat',
+        label: 'Send & Auto Submit to Quick Chat',
         submenu: buildSendToQuickSubmenu(win, { mode: SEND_MODE.PLAIN, autoSubmit: true })
       },
       { type: 'separator' },
@@ -843,7 +843,7 @@ function buildContextMenuTemplate(win, params, options = {}) {
         }
       },
       {
-        label: 'Save Chat Paneâ€¦',
+        label: 'Save Chat Pane',
         click: async () => {
           await promptSaveChatPane(win);
         }
@@ -870,14 +870,14 @@ function buildContextMenuTemplate(win, params, options = {}) {
         }
       },
       {
-        label: 'Save Selection as Markdownâ€¦',
+        label: 'Save Selection as Markdown',
         enabled: hasSelection,
         click: async () => {
           await saveSelectionAsMarkdown(win);
         }
       },
       {
-        label: 'Save Selection as Plain Textâ€¦',
+        label: 'Save Selection as Plain Text',
         enabled: hasSelection,
         click: async () => {
           try {
@@ -1031,7 +1031,7 @@ function applyDynamicWidth(win) {
   try { win.webContents.executeJavaScript(script).catch(()=>{}); } catch {}
 }
 
-// Responsive VW: keep --copilot-vw tied to window size (95 â†’ 30vw)
+// Responsive VW: keep --copilot-vw tied to window size (95    30vw)
 function attachVWResize(win) {
   if (!win || !win.webContents) return;
   const wc = win.webContents;
@@ -1781,7 +1781,7 @@ function appendEditItems(editSubmenu) {
 //    { role: 'cut' }, { role: 'copy' }, { role: 'paste' },
 //    { role: 'selectAll' }, { type: 'separator' },
     {
-      label: 'Findâ€¦',
+      label: 'Find',
       accelerator: 'Ctrl+F',
       click: () => {
         const w = BrowserWindow.getFocusedWindow() || mainWindow;
@@ -1834,12 +1834,12 @@ function appendEditItems(editSubmenu) {
   click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.QUOTE, autoSubmit: false, targetQuickId: null }); }
  },
  {
-  label: 'Send Selection & Autoâ€‘Submit (Active Quick)',
+  label: 'Send Selection & Auto Submit (Active Quick)',
   accelerator: 'Ctrl+Alt+Enter',
   click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.PLAIN, autoSubmit: true, targetQuickId: null }); }
  },
  {
-  label: 'Send Selection to Specific Quick Chatâ€¦',
+  label: 'Send Selection to Specific Quick Chat',
   accelerator: 'Ctrl+Alt+W',
   click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToSpecificQuickViaDialog(src, { mode: SEND_MODE.PLAIN, autoSubmit: false }); }
  },
@@ -1866,11 +1866,11 @@ function appendEditItems(editSubmenu) {
   Menu.buildFromTemplate(template).items.forEach(i => editSubmenu.append(i));
 }
 
-// --- Help menu: add Aboutâ€¦ screen (under the menu bar) ----------------------
+// --- Help menu: add About screen (under the menu bar) ----------------------
 function appendHelpItems(helpSubmenu) {
   const template = [
     new MenuItem({
-      label: 'Aboutâ€¦',
+      label: 'About',
       // Optional: make F1 open About; change/remove if you already use F1 elsewhere
       accelerator: 'F1',
       click: async () => {
@@ -1887,7 +1887,7 @@ function appendHelpItems(helpSubmenu) {
             icon: appIconImage
           });
         } catch (err) {
-          console.error('Helpâ†’About dialog failed:', err);
+          console.error('Help  About dialog failed:', err);
         }
       }
     }),
@@ -1898,7 +1898,7 @@ function appendHelpItems(helpSubmenu) {
     //   click: () => shell.openExternal('https://your.docs.url/')
     // }),
     // new MenuItem({
-    //   label: 'Report Issueâ€¦',
+    //   label: 'Report Issue',
     //   click: () => shell.openExternal('https://your.issues.url/')
     // }),
   ];
@@ -2013,7 +2013,7 @@ async function selectChatPane(win) {
  return success || { ok: false, selectedTextLength: 0 }
 }
 
-// ---------- Selection â†’ Markdown helpers ----------
+// ---------- Selection  Markdown helpers ----------
 // Extract the current selection from the renderer as HTML fragment and text.
 async function getSelectionFragment(win) {
 
@@ -2140,7 +2140,7 @@ function buildSendToQuickSubmenu(sourceWin, optsBase) {
   }
 
   items.push({ type: 'separator' });
-  items.push({ label: 'Chooseâ€¦', click: async () => sendSelectionToSpecificQuickViaDialog(sourceWin, optsBase) });
+  items.push({ label: 'Choose', click: async () => sendSelectionToSpecificQuickViaDialog(sourceWin, optsBase) });
   items.push({
     label: 'New Quick Chat Window',
     click: async () => {
@@ -2194,7 +2194,7 @@ ipcMain.on(IPC.QUICK_NEW, () => {
   catch (e) { console.error('IPC quick new failed:', e); }
 });
 
-// Turndown-backed HTML â†’ Markdown converter.
+// Turndown-backed HTML  Markdown converter.
 // Regex is only used here for targeted preprocessing/post-processing around Turndown.
 const turndownService = createTurndownService();
 
@@ -2392,7 +2392,7 @@ function stripTags(s) {
   // Remove any remaining HTML tags; entity decoding is handled earlier
   return String(s || '')
     .replace(/<[^>]+>/g, '')
-    .replace(/\u00A0/g, ' '); // non-breaking space â†’ regular space
+    .replace(/\u00A0/g, ' '); // non-breaking space  regular space
 }
 
 // --- Centralized sanitizers ---
@@ -2605,7 +2605,7 @@ async function promptSaveChatPane(win) {
   if (!win) return;
   try {
     const { filePath, canceled } = await dialog.showSaveDialog(win, {
-      title: 'Save Chat Pane Asâ€¦',
+      title: 'Save Chat Pane As',
       defaultPath: 'copilot-chat.md',  // Default to Markdown file name
       // Put Markdown first so it's the preselected filter
       filters: [
@@ -2635,7 +2635,7 @@ async function saveChatPaneAsMarkdown(win, filePath) {
       return;
     }
 
-    // Convert cleaned semantic HTML â†’ Markdown
+    // Convert cleaned semantic HTML  Markdown
     // (No entity decoding; structure already preserved)
     const paneHtml = String(snapshot.html ?? '');
 
@@ -2681,7 +2681,7 @@ async function saveChatPaneAsText(win, filePath) {
       try { dialog.showErrorBox('Save Chat Pane as Text', 'Chat pane not found.'); } catch {}
       return;
     }
-    // Convert pane HTML â†’ Plain Text: decode â†’ sanitize â†’ strip tags â†’ normalize
+    // Convert pane HTML  Plain Text: decode  sanitize  strip tags  normalize
     const paneHtml = String(result.html || '');
     const safeHtml = stripExecutableBlocks(decodeEntities(paneHtml));
     let text = stripTags(safeHtml);
@@ -2702,29 +2702,29 @@ async function saveChatAsPDF(win, filePath) {
   await fs.promises.writeFile(filePath, pdf);
 }
 
-// ---------- File menu (Save / Save Asâ€¦) ----------
+// ---------- File menu (Save / Save As) ----------
 function appendFileItems(fileSubmenu, win) {
   ensureSaveState(win);
   const items = [
     new MenuItem({ type: 'separator' }),
     new MenuItem({
-      label: 'Save Chat Paneâ€¦',
+      label: 'Save Chat Pane',
       accelerator: 'Ctrl+S',
       click: async () => {
         try { await promptSaveChatPane(win); }
         catch (err) {
-          console.error('Fileâ†’Save Chat Pane failed:', err);
+          console.error('File  Save Chat Pane failed:', err);
           try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
         }
       }
     }),
     new MenuItem({
-      label: 'Save Selection as Markdownâ€¦',
+      label: 'Save Selection as Markdown',
       accelerator: 'Ctrl+Shift+M',
       click: async () => {
         try { await saveSelectionAsMarkdown(win); }
         catch (err) {
-          console.error('Fileâ†’Save Selection as Markdown failed:', err);
+          console.error('File  Save Selection as Markdown failed:', err);
           try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
         }
       }
@@ -2746,7 +2746,7 @@ function appendFileItems(fileSubmenu, win) {
 
 async function saveAsDialog(win) {
   const { filePath, canceled } = await dialog.showSaveDialog(win, {
-    title: 'Save Page Asâ€¦',
+    title: 'Save Page As',
     defaultPath: 'copilot.html',
     filters: [
       { name: 'Web Page, HTML only', extensions: ['html'] },
@@ -2771,10 +2771,10 @@ function createWindow() {
  const taIcon = nativeImage.createFromPath(getIconPath('copilot-for-linux.png'));
  /*     console.log('Native path resolved:', taIcon); // Echo to terminal
  if (taIcon.isEmpty()) {
-  console.error('ICON FAILED TO LOAD â€” path is wrong or file corrupted');
+  console.error('ICON FAILED TO LOAD path is wrong or file corrupted');
  } else {
   console.log('ICON LOADED SUCCESSFULLY');
-  console.log('Size:', taIcon.getSize());           // â†’ { width: 512, height: 512 }
+  console.log('Size:', taIcon.getSize());           //    { width: 512, height: 512 }
   console.log('Has alpha channel:', taIcon.hasAlpha?.() ?? true);
  }
 */
@@ -2793,7 +2793,7 @@ function createWindow() {
   // Assign to the outer-scoped variable (do NOT redeclare with const here)
   mainWindow = new BrowserWindow({
   skipTaskbar: false,
-  title: 'Copilot â€” Main Chat',
+  title: 'Copilot Main Chat',
     width: initialBounds.width,
     height: initialBounds.height,
     x: typeof initialBounds.x === 'number' ? initialBounds.x : undefined,
@@ -2817,7 +2817,7 @@ function createWindow() {
 
   });
 
-  // Ensure menu bar is visible so users can access Edit â†’ Findâ€¦
+  // Ensure menu bar is visible so users can access Edit    Find
   mainWindow.setMenuBarVisibility(true);
 
   // --- Right-click native context menu with Cut/Copy/Paste/SelectAll ---
@@ -3040,9 +3040,9 @@ function createTray() {
     },
     { type: 'separator' },
 
-    // ---- NEW: Aboutâ€¦ item ----
+    // ---- NEW: About item ----
     {
-      label: 'Aboutâ€¦',
+      label: 'About',
       click: async () => {
         const info = getRuntimeInfo();
         try {
@@ -3066,7 +3066,7 @@ function createTray() {
     {
       label: 'Quit',
       click: () => {
-        isQuitting = true; // so close handler doesnâ€™t re-hide
+        isQuitting = true; // so close handler doesn't re-hide
         app.quit();
       }
     }
