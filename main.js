@@ -1679,6 +1679,10 @@ function applyWordStartOptions(opts) {
 }
 
 function openFindModal(parent) {
+  // Force all conversation messages to fully render so findInPage can
+  // reach them.  Runs before the early-return so a re-focused modal
+  // re-applies the override if the page navigated while it was hidden.
+  enableFindContentVisibility(parent);
   if (findModal && !findModal.isDestroyed()) {
     findModal.show(); findModal.focus(); return;
   }
@@ -1763,6 +1767,14 @@ function openFindModal(parent) {
   findModal.once('ready-to-show', () => {
     try { findModal.show(); findModal.focus(); } catch {}
   });
+
+  // Restore lazy rendering when modal closes — covers all close paths:
+  // user clicks Close, presses Escape, or clicks the WM X button.
+  findModal.on('closed', () => {
+    disableFindContentVisibility();
+    findModal = null;
+  });
+
   findModal.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('Find modal failed to load:', code, desc, url);
   });
@@ -1773,6 +1785,57 @@ let lastFindTerm = '';
 let lastFindOpts = { forward: true, matchCase: false, medialCapitalAsWordStart: true, wordStart: true, findNext: false };
 let findDebounce;
 const FIND_DEBOUNCE_MS = 20;
+
+// --- Find-in-page content-visibility on-demand override ---------------------
+// The Copilot web app applies content-visibility:auto to off-screen message
+// items for faster initial paint.  Chromium's findInPage() skips those
+// unrendered subtrees entirely.  We inject a CSS override only while the
+// Find modal is open, then remove it on close so the lazy-render
+// optimisation is preserved during normal browsing.
+// ---------------------------------------------------------------------------
+let findCVKey = null;       // insertCSS key for the override
+let findCVTargetWC = null;  // webContents the override was applied to
+
+function buildFindContentVisibilityCSS() {
+  return `
+    ${CHAT_MESSAGE_LIST_PSEUDO},
+    ${CHAT_MESSAGE_LIST_PSEUDO} > *,
+    ${CHAT_SCOPE_PSEUDO} > *,
+    [role="feed"],
+    [role="feed"] > *,
+    [role="article"],
+    [data-testid*="copilot-message"],
+    [id^="copilot-message-" i] {
+      content-visibility: visible !important;
+      contain-intrinsic-size: auto !important;
+    }
+  `;
+}
+
+function enableFindContentVisibility(win) {
+  if (!win?.webContents) return;
+  // Already active on this webContents — nothing to do
+  if (findCVKey && findCVTargetWC === win.webContents) return;
+  // Clean up stale override on a different webContents (if any)
+  disableFindContentVisibility();
+  const wc = win.webContents;
+  wc.insertCSS(buildFindContentVisibilityCSS())
+    .then(key => { findCVKey = key; findCVTargetWC = wc; })
+    .catch(err => {
+      console.error('enableFindContentVisibility insertCSS failed:', err);
+      findCVKey = null;
+      findCVTargetWC = null;
+    });
+}
+
+function disableFindContentVisibility() {
+  if (!findCVKey || !findCVTargetWC) return;
+  const key = findCVKey;
+  const wc = findCVTargetWC;
+  findCVKey = null;
+  findCVTargetWC = null;
+  try { wc.removeInsertedCSS(key).catch(() => {}); } catch {}
+}
 
 // Build Edit menu as a reusable factory
 function appendEditItems(editSubmenu) {
@@ -2964,6 +3027,7 @@ function createWindow() {
   });
 
   ipcMain.on('find-modal-close', () => {
+    disableFindContentVisibility();
     if (findModal && !findModal.isDestroyed()) { findModal.close(); }
     findModal = null;
   });
