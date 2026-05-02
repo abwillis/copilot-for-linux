@@ -89,3 +89,37 @@ function onShiftClickDirectOpen(event) {
 
 window.addEventListener('click', onShiftClickDirectOpen, true);
 
+// ============================================================================
+// Hover over links: show full URL in native tooltip
+// ============================================================================
+function findAnchorForHover(target) {
+    try {
+        if (!target) return null;
+        if (typeof target.closest === 'function') {
+            return target.closest('a[href]');
+        }
+    } catch {}
+    return null;
+}
+
+window.addEventListener(
+    'mouseover',
+    (event) => {
+        try {
+            const a = findAnchorForHover(event.target);
+            if (!a) return;
+
+            // Only set title if not already present
+            if (!a.hasAttribute('title') || !a.getAttribute('title')) {
+                const href = a.getAttribute('href');
+                if (href) {
+                    a.setAttribute('data-copilot-hover-title', '1');
+                    a.setAttribute('title', href);
+                }
+            }
+        } catch {}
+    },
+    true
+);
+
+
