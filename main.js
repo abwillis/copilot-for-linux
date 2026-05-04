@@ -2645,7 +2645,10 @@ async function savePaneAsCleanHTML(win, filePath) {
 // Unified chooser by extension
 async function saveChatPaneByExtension(win, filePath) {
   const lower = String(filePath).toLowerCase();
-  if (lower.endsWith('.html')) {
+  if (lower.endsWith('.pdf')) {
+  // New: export chat/page view to PDF
+  await saveChatPaneAsPDF(win, filePath);
+ } else if (lower.endsWith('.html')) {
     // Use cleaned fragment (B2)
     await savePaneAsCleanHTML(win, filePath);
   } else if (lower.endsWith('.mhtml')) {
@@ -2673,6 +2676,7 @@ async function promptSaveChatPane(win) {
       // Put Markdown first so it's the preselected filter
       filters: [
         { name: 'Markdown', extensions: ['md', 'markdown'] },
+        { name: 'PDF', extensions: ['pdf'] },
         { name: 'Web Page, HTML (clean)', extensions: ['html'] },
         { name: 'Web Archive (MHTML)', extensions: ['mhtml'] },
         { name: 'Plain Text', extensions: ['txt'] }
@@ -2760,9 +2764,189 @@ async function saveChatPaneAsText(win, filePath) {
   }
 }
 
-async function saveChatAsPDF(win, filePath) {
-  const pdf = await win.webContents.printToPDF({ printBackground: true, marginsType: 1 });
-  await fs.promises.writeFile(filePath, pdf);
+function escapeHtmlForExport(value) {
+ return String(value ?? '')
+ .replace(/&/g, '&amp;')
+ .replace(/</g, '&lt;')
+ .replace(/>/g, '&gt;')
+ .replace(/"/g, '&quot;')
+ .replace(/'/g, '&#39;');
+}
+
+function buildPrintableChatPaneHtml({ title = 'Copilot Chat', html = '' } = {}) {
+ return `<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>${escapeHtmlForExport(title)}</title>
+ <style>
+ @page {
+ margin: 0.5in;
+ }
+
+ html,
+ body {
+ margin: 0;
+ padding: 0;
+ background: #ffffff;
+ color: #111827;
+ font-family: Arial, sans-serif;
+ font-size: 12pt;
+ line-height: 1.45;
+ }
+
+ *,
+ *::before,
+ *::after {
+ box-sizing: border-box;
+ }
+
+ .${EXPORT_ROOT_CLASS} {
+ width: 100%;
+ max-width: 100%;
+ }
+
+ h1,
+ h2,
+ h3,
+ h4,
+ h5,
+ h6 {
+ break-after: avoid;
+ page-break-after: avoid;
+ margin: 0.85em 0 0.35em;
+ }
+
+ p {
+ margin: 0.45em 0;
+ }
+
+ a {
+ color: #0645ad;
+ overflow-wrap: anywhere;
+ word-break: break-word;
+ }
+
+ pre,
+ code,
+ kbd,
+ samp {
+ font-family: Consolas, Menlo, Monaco, monospace;
+ white-space: pre-wrap;
+ overflow-wrap: anywhere;
+ word-break: break-word;
+ }
+
+ pre {
+ background: #f5f7fa;
+ border: 1px solid #e3e7ee;
+ border-radius: 6px;
+ padding: 10px;
+ max-width: 100%;
+ overflow: visible;
+ break-inside: auto;
+ page-break-inside: auto;
+ }
+
+ blockquote {
+ border-left: 3px solid #cbd5e1;
+ margin: 0.5em 0;
+ padding: 0.2em 0.8em;
+ color: #374151;
+ break-inside: avoid;
+ page-break-inside: avoid;
+ }
+
+ table {
+ width: 100%;
+ max-width: 100%;
+ border-collapse: collapse;
+ table-layout: auto;
+ break-inside: auto;
+ page-break-inside: auto;
+ }
+
+ td,
+ th {
+ border: 1px solid #e5e7eb;
+ padding: 6px 8px;
+ vertical-align: top;
+ overflow-wrap: anywhere;
+ word-break: break-word;
+ }
+
+ img,
+ svg,
+ canvas,
+ video {
+ max-width: 100%;
+ height: auto;
+ }
+ </style>
+</head>
+<body>
+ <div class="${EXPORT_ROOT_CLASS}">${html || '<p>No chat content found.</p>'}</div>
+</body>
+</html>`;
+}
+
+async function saveChatPaneAsPDF(win, filePath) {
+ if (!win) return;
+ let printWindow = null;
+ let tempHtmlPath = null;
+
+ try {
+ const snapshot = await getBestChatRootCleaned(win);
+ if (!snapshot?.ok) {
+ safeShowError('Save Chat Pane as PDF', 'Chat pane not found.');
+ return;
+ }
+
+ const title = win.webContents.getTitle?.() || 'Copilot Chat';
+ const htmlDoc = buildPrintableChatPaneHtml({
+ title,
+ html: String(snapshot.html ?? '')
+ });
+
+ const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+ tempHtmlPath = path.join(app.getPath('temp'), `copilot-chat-pane-print-${stamp}.html`);
+ await fs.promises.writeFile(tempHtmlPath, htmlDoc, 'utf8');
+
+ printWindow = new BrowserWindow({
+ show: false,
+ width: 1200,
+ height: 1600,
+ webPreferences: {
+ nodeIntegration: false,
+ contextIsolation: true,
+ sandbox: true,
+ backgroundThrottling: false
+ }
+ });
+
+ await printWindow.loadFile(tempHtmlPath);
+
+ const pdf = await printWindow.webContents.printToPDF({
+ printBackground: true,
+ marginsType: 1,
+ pageSize: 'Letter',
+ landscape: false,
+ preferCSSPageSize: true
+ });
+
+ await fs.promises.writeFile(filePath, pdf);
+ } catch (err) {
+ console.error('Save Chat Pane as PDF failed:', err);
+ safeShowError('Save failed', String(err?.message ?? err));
+ } finally {
+ if (printWindow && !printWindow.isDestroyed()) {
+ try { printWindow.destroy(); } catch {}
+ }
+ if (tempHtmlPath) {
+ try { await fs.promises.unlink(tempHtmlPath); } catch {}
+ }
+ }
 }
 
 // ---------- File menu (Save / Save As) ----------
