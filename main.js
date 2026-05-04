@@ -522,6 +522,59 @@ function buildQuickChatManagerMenuTemplate() {
     }
   });
 
+  items.push({ type: 'separator' });
+
+  items.push({
+    label: 'Send Selection to Active Quick Chat',
+    accelerator: 'Ctrl+Alt+Q',
+    click: async () => {
+      const src = BrowserWindow.getFocusedWindow() || mainWindow;
+      await sendSelectionToQuick(src, {
+        mode: SEND_MODE.PLAIN,
+        autoSubmit: false,
+        targetQuickId: null
+      });
+    }
+  });
+
+  items.push({
+    label: 'Send Selection as Quote to Active Quick Chat',
+    accelerator: 'Ctrl+Alt+Shift+Q',
+    click: async () => {
+      const src = BrowserWindow.getFocusedWindow() || mainWindow;
+      await sendSelectionToQuick(src, {
+        mode: SEND_MODE.QUOTE,
+        autoSubmit: false,
+        targetQuickId: null
+      });
+    }
+  });
+
+  items.push({
+    label: 'Send Selection & Auto Submit to Active Quick Chat',
+    accelerator: 'Ctrl+Alt+Enter',
+    click: async () => {
+      const src = BrowserWindow.getFocusedWindow() || mainWindow;
+      await sendSelectionToQuick(src, {
+        mode: SEND_MODE.PLAIN,
+        autoSubmit: true,
+        targetQuickId: null
+      });
+    }
+  });
+
+  items.push({
+    label: 'Send Selection to Specific Quick Chat',
+    accelerator: 'Ctrl+Alt+W',
+    click: async () => {
+      const src = BrowserWindow.getFocusedWindow() || mainWindow;
+      await sendSelectionToSpecificQuickViaDialog(src, {
+        mode: SEND_MODE.PLAIN,
+        autoSubmit: false
+      });
+    }
+  });
+
   if (!wins.length) {
     items.push({ type: 'separator' });
     items.push({ label: 'No Quick Chat Windows Open', enabled: false });
@@ -2301,53 +2354,21 @@ function appendEditItems(editSubmenu) {
       click: () => { const wc = getWC(); if (!wc) return; wc.stopFindInPage('clearSelection'); }
     },
     { type: 'separator' },
- {
-  label: 'New Quick Chat Window',
-  accelerator: 'Ctrl+Alt+N',
-  click: () => { try { reveal(createQuickChatWindow()); } catch (e) { console.error('New Quick Chat failed:', e); } }
- },
- {
-  label: 'Show Active Quick Chat',
-  accelerator: 'Ctrl+Alt+2',
-  click: () => { try { const w = getActiveQuickChatWindow({ createIfMissing: true }); if (w) reveal(w); } catch (e) { console.error('Show Quick Chat failed:', e); } }
- },
- { type: 'separator' },
- {
-  label: 'Send Selection to Active Quick Chat',
-  accelerator: 'Ctrl+Alt+Q',
-  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.PLAIN, autoSubmit: false, targetQuickId: null }); }
- },
- {
-  label: 'Send Selection as Quote (Active Quick)',
-  accelerator: 'Ctrl+Alt+Shift+Q',
-  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.QUOTE, autoSubmit: false, targetQuickId: null }); }
- },
- {
-  label: 'Send Selection & Auto Submit (Active Quick)',
-  accelerator: 'Ctrl+Alt+Enter',
-  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToQuick(src, { mode: SEND_MODE.PLAIN, autoSubmit: true, targetQuickId: null }); }
- },
- {
-  label: 'Send Selection to Specific Quick Chat',
-  accelerator: 'Ctrl+Alt+W',
-  click: async () => { const src = BrowserWindow.getFocusedWindow() || mainWindow; await sendSelectionToSpecificQuickViaDialog(src, { mode: SEND_MODE.PLAIN, autoSubmit: false }); }
- },
- { type: 'separator' },
- {
-  label: 'Select Chat Pane',
-      accelerator: 'Ctrl+Shift+A',
-      click: async () => {
-        const w = BrowserWindow.getFocusedWindow() || mainWindow;
-        if (!w) return;
-        try {
-          const res = await selectChatPane(w);
-          if (!res?.ok) {
-            try { dialog.showErrorBox('Select Chat Pane', 'Could not select the chat pane.'); } catch {}
-          }
-        } catch (err) {
-          console.error('Select Chat Pane failed:', err);
-          try { dialog.showErrorBox('Select Chat Pane failed', String(err?.message || err)); } catch {}
-        }
+    {
+      label: 'Select Chat Pane',
+          accelerator: 'Ctrl+Shift+A',
+          click: async () => {
+            const w = BrowserWindow.getFocusedWindow() || mainWindow;
+            if (!w) return;
+            try {
+              const res = await selectChatPane(w);
+              if (!res?.ok) {
+                try { dialog.showErrorBox('Select Chat Pane', 'Could not select the chat pane.'); } catch {}
+              }
+            } catch (err) {
+              console.error('Select Chat Pane failed:', err);
+              try { dialog.showErrorBox('Select Chat Pane failed', String(err?.message || err)); } catch {}
+            }
       }
     },
   ];
@@ -2396,6 +2417,7 @@ function appendHelpItems(helpSubmenu) {
 
 
 // Augment (mutate) the existing app menu rather than replacing it
+
 function augmentApplicationMenu(win) {
   // Start from the current application menu.
   // NOTE: On Windows/Linux this may be null until first set; handle that.
@@ -2417,8 +2439,6 @@ function augmentApplicationMenu(win) {
   }
   appendEditItems(editSubmenu);
 
-  installQuickChatMenu(appMenu);
-
   // Ensure "Help" submenu exists, then append our items
   let helpSubmenu = appMenu.items.find(i => i.label === 'Help')?.submenu;
   if (!helpSubmenu) {
@@ -2428,9 +2448,12 @@ function augmentApplicationMenu(win) {
   }
   appendHelpItems(helpSubmenu);
 
-  // Re-apply the mutated menu so the OS picks up changes
-  Menu.setApplicationMenu(appMenu);
+  // installQuickChatMenu() rebuilds and applies the full application menu.
+  // Call it last so the rebuilt menu includes File/Edit/Help and is not
+  // overwritten by re-applying the pre-rebuild appMenu object.
+  installQuickChatMenu(appMenu);
 }
+
 
 function ensureSaveState(win) {
   if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
