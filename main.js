@@ -2036,6 +2036,91 @@ function getRuntimeInfo() {
   };
 }
 
+
+// ============================================================================
+// Session / cache / troubleshooting menu helpers
+// ============================================================================
+function getCopilotSession() {
+  return session.fromPartition(COPILOT_PARTITION);
+}
+
+function getActiveCopilotWindow() {
+  const focused = BrowserWindow.getFocusedWindow();
+  const parent = focused?.getParentWindow?.();
+  return parent || focused || mainWindow;
+}
+
+function getActiveCopilotWebContents() {
+  const win = getActiveCopilotWindow();
+  if (!win || win.isDestroyed?.()) return null;
+  return win.webContents || null;
+}
+
+function reloadCopilot({ ignoreCache = false } = {}) {
+  try {
+    const wc = getActiveCopilotWebContents();
+    if (!wc) return;
+    if (ignoreCache) wc.reloadIgnoringCache();
+    else wc.reload();
+  } catch (err) {
+    console.error('Reload Copilot failed:', err);
+    safeShowError('Reload Copilot failed', String(err?.message ?? err));
+  }
+}
+
+async function clearCopilotCache() {
+  try {
+    const ses = getCopilotSession();
+    await ses.clearCache();
+  } catch (err) {
+    console.error('Clear Copilot Cache failed:', err);
+    safeShowError('Clear Copilot Cache failed', String(err?.message ?? err));
+  }
+}
+
+async function clearCookiesAndSignOut() {
+  try {
+    const ses = getCopilotSession();
+    await ses.clearStorageData({
+      storages: [
+        'cookies',
+        'localstorage',
+        'sessionstorage',
+        'indexeddb',
+        'serviceworkers',
+        'cachestorage'
+      ]
+    });
+    reloadCopilot({ ignoreCache: true });
+  } catch (err) {
+    console.error('Clear Cookies / Sign Out failed:', err);
+    safeShowError('Clear Cookies / Sign Out failed', String(err?.message ?? err));
+  }
+}
+
+function copyCurrentUrl() {
+  try {
+    const wc = getActiveCopilotWebContents();
+    if (!wc) return;
+    clipboard.writeText(wc.getURL());
+  } catch (err) {
+    console.error('Copy Current URL failed:', err);
+    safeShowError('Copy Current URL failed', String(err?.message ?? err));
+  }
+}
+
+async function openCurrentUrlExternal() {
+  try {
+    const wc = getActiveCopilotWebContents();
+    if (!wc) return;
+    const url = wc.getURL();
+    if (url) await shell.openExternal(url);
+  } catch (err) {
+    console.error('Open Current URL in External Browser failed:', err);
+    safeShowError('Open Current URL failed', String(err?.message ?? err));
+  }
+}
+
 app.setName('copilot-for-linux');  // Shows as WMClass "yourapp" or "YourApp"
 app.setAppUserModelId('your.company.copilot');
 
@@ -2416,6 +2501,48 @@ function appendHelpItems(helpSubmenu) {
 }
 
 
+
+// --- Session menu: reload/cache/auth/current URL troubleshooting ------------
+function appendSessionItems(sessionSubmenu) {
+  const template = [
+    new MenuItem({
+      label: 'Reload Copilot',
+      accelerator: 'Ctrl+R',
+      click: () => reloadCopilot({ ignoreCache: false })
+    }),
+    new MenuItem({
+      label: 'Hard Reload',
+      accelerator: 'Ctrl+Shift+R',
+      click: () => reloadCopilot({ ignoreCache: true })
+    }),
+    new MenuItem({ type: 'separator' }),
+    new MenuItem({
+      label: 'Clear Copilot Cache',
+      click: async () => {
+        await clearCopilotCache();
+      }
+    }),
+    new MenuItem({
+      label: 'Clear Cookies / Sign Out',
+      click: async () => {
+        await clearCookiesAndSignOut();
+      }
+    }),
+    new MenuItem({
+      label: 'Copy Current URL',
+      click: () => copyCurrentUrl()
+    }),
+    new MenuItem({
+      label: 'Open Current URL in External Browser',
+      click: async () => {
+        await openCurrentUrlExternal();
+      }
+    })
+  ];
+
+  template.forEach(i => sessionSubmenu.append(i));
+}
+
 // Augment (mutate) the existing app menu rather than replacing it
 
 function augmentApplicationMenu(win) {
@@ -2438,6 +2565,17 @@ function augmentApplicationMenu(win) {
     appMenu.insert(1, new MenuItem({ label: 'Edit', submenu: editSubmenu }));
   }
   appendEditItems(editSubmenu);
+
+  // Ensure "Session" submenu exists, then append reload/cache/auth items.
+  let sessionSubmenu = appMenu.items.find(i => i.label === 'Session')?.submenu;
+  if (!sessionSubmenu) {
+    sessionSubmenu = new Menu();
+    const sessionItem = new MenuItem({ label: 'Session', submenu: sessionSubmenu });
+    const helpIndex = appMenu.items.findIndex(i => i.label === 'Help');
+    if (helpIndex >= 0) appMenu.insert(helpIndex, sessionItem);
+    else appMenu.append(sessionItem);
+  }
+  appendSessionItems(sessionSubmenu);
 
   // Ensure "Help" submenu exists, then append our items
   let helpSubmenu = appMenu.items.find(i => i.label === 'Help')?.submenu;
@@ -3427,14 +3565,7 @@ function appendFileItems(fileSubmenu, win) {
         }
       }
     }),
-    new MenuItem({
-      label: 'Toggle DevTools',
-      accelerator: 'Ctrl+Shift+I',
-      click: () => {
-        try { if (mainWindow) mainWindow.webContents.toggleDevTools(); }
-        catch (err) { console.error('Toggle DevTools failed:', err); }
-      }
-    }),
+
 //    new MenuItem({ type: 'separator' }),
     // Use role for native Quit (macOS label/shortcut handled automatically)
 //    new MenuItem({ role: 'quit' }),

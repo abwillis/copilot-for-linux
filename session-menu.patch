@@ -1,0 +1,209 @@
+--- a/main.js
++++ b/main.js
+@@ -2031,16 +2031,113 @@
+       `Version: ${appVersion}\n` +
+       `Node: ${nodeVersion}\n` +
+       `V8: ${v8Version}\n` +
+       `Electron: ${electronVersion}\n` +
+       `Chromium: ${chromeVersion}\n`
+   };
+ }
+ 
++
++// ============================================================================
++// Session / cache / troubleshooting menu helpers
++// ============================================================================
++function getCopilotSession() {
++  return session.fromPartition(COPILOT_PARTITION);
++}
++
++function getActiveCopilotWindow() {
++  const focused = BrowserWindow.getFocusedWindow();
++  const parent = focused?.getParentWindow?.();
++  return parent || focused || mainWindow;
++}
++
++function getActiveCopilotWebContents() {
++  const win = getActiveCopilotWindow();
++  if (!win || win.isDestroyed?.()) return null;
++  return win.webContents || null;
++}
++
++function reloadCopilot({ ignoreCache = false } = {}) {
++  try {
++    const wc = getActiveCopilotWebContents();
++    if (!wc) return;
++    if (ignoreCache) wc.reloadIgnoringCache();
++    else wc.reload();
++  } catch (err) {
++    console.error('Reload Copilot failed:', err);
++    safeShowError('Reload Copilot failed', String(err?.message ?? err));
++  }
++}
++
++async function clearCopilotCache() {
++  try {
++    const ses = getCopilotSession();
++    await ses.clearCache();
++  } catch (err) {
++    console.error('Clear Copilot Cache failed:', err);
++    safeShowError('Clear Copilot Cache failed', String(err?.message ?? err));
++  }
++}
++
++async function clearCookiesAndSignOut() {
++  try {
++    const ses = getCopilotSession();
++    await ses.clearStorageData({
++      storages: [
++        'cookies',
++        'localstorage',
++        'sessionstorage',
++        'indexeddb',
++        'serviceworkers',
++        'cachestorage'
++      ]
++    });
++    reloadCopilot({ ignoreCache: true });
++  } catch (err) {
++    console.error('Clear Cookies / Sign Out failed:', err);
++    safeShowError('Clear Cookies / Sign Out failed', String(err?.message ?? err));
++  }
++}
++
++function copyCurrentUrl() {
++  try {
++    const wc = getActiveCopilotWebContents();
++    if (!wc) return;
++    clipboard.writeText(wc.getURL());
++  } catch (err) {
++    console.error('Copy Current URL failed:', err);
++    safeShowError('Copy Current URL failed', String(err?.message ?? err));
++  }
++}
++
++async function openCurrentUrlExternal() {
++  try {
++    const wc = getActiveCopilotWebContents();
++    if (!wc) return;
++    const url = wc.getURL();
++    if (url) await shell.openExternal(url);
++  } catch (err) {
++    console.error('Open Current URL in External Browser failed:', err);
++    safeShowError('Open Current URL failed', String(err?.message ?? err));
++  }
++}
++
++function openDevToolsForActiveCopilotWindow() {
++  try {
++    const wc = getActiveCopilotWebContents();
++    if (!wc) return;
++    if (wc.isDevToolsOpened()) wc.focus();
++    else wc.openDevTools({ mode: 'right' });
++  } catch (err) {
++    console.error('Open DevTools failed:', err);
++    safeShowError('Open DevTools failed', String(err?.message ?? err));
++  }
++}
++
+ app.setName('copilot-for-linux');  // Shows as WMClass "yourapp" or "YourApp"
+ app.setAppUserModelId('your.company.copilot');
+ 
+ // === Parent-aware helpers for find-in-page ===
+ // Prefer the parent window's webContents when the focused window is a modal.
+ function getWCFromEventSender(sender) {
+   const modalWin = BrowserWindow.fromWebContents(sender);
+   const targetWin = modalWin?.getParentWindow() || mainWindow;
+@@ -2411,16 +2508,64 @@
+     //   label: 'Report Issue',
+     //   click: () => shell.openExternal('https://your.issues.url/')
+     // }),
+   ];
+   template.forEach(i => helpSubmenu.append(i));
+ }
+ 
+ 
++
++// --- Session menu: reload/cache/auth/current URL troubleshooting ------------
++function appendSessionItems(sessionSubmenu) {
++  const template = [
++    new MenuItem({
++      label: 'Reload Copilot',
++      accelerator: 'Ctrl+R',
++      click: () => reloadCopilot({ ignoreCache: false })
++    }),
++    new MenuItem({
++      label: 'Hard Reload',
++      accelerator: 'Ctrl+Shift+R',
++      click: () => reloadCopilot({ ignoreCache: true })
++    }),
++    new MenuItem({ type: 'separator' }),
++    new MenuItem({
++      label: 'Clear Copilot Cache',
++      click: async () => {
++        await clearCopilotCache();
++      }
++    }),
++    new MenuItem({
++      label: 'Clear Cookies / Sign Out',
++      click: async () => {
++        await clearCookiesAndSignOut();
++      }
++    }),
++    new MenuItem({ type: 'separator' }),
++    new MenuItem({
++      label: 'Open DevTools',
++      accelerator: 'Ctrl+Shift+I',
++      click: () => openDevToolsForActiveCopilotWindow()
++    }),
++    new MenuItem({
++      label: 'Copy Current URL',
++      click: () => copyCurrentUrl()
++    }),
++    new MenuItem({
++      label: 'Open Current URL in External Browser',
++      click: async () => {
++        await openCurrentUrlExternal();
++      }
++    })
++  ];
++
++  template.forEach(i => sessionSubmenu.append(i));
++}
++
+ // Augment (mutate) the existing app menu rather than replacing it
+ 
+ function augmentApplicationMenu(win) {
+   // Start from the current application menu.
+   // NOTE: On Windows/Linux this may be null until first set; handle that.
+   const appMenu = Menu.getApplicationMenu() ?? new Menu();
+ 
+   // Ensure "File" submenu exists, then append our items
+@@ -2433,16 +2578,27 @@
+ 
+   // Ensure "Edit" submenu exists, then append our items
+   let editSubmenu = appMenu.items.find(i => i.label === 'Edit')?.submenu;
+   if (!editSubmenu) {
+     editSubmenu = new Menu();
+     appMenu.insert(1, new MenuItem({ label: 'Edit', submenu: editSubmenu }));
+   }
+   appendEditItems(editSubmenu);
++
++  // Ensure "Session" submenu exists, then append reload/cache/auth items.
++  let sessionSubmenu = appMenu.items.find(i => i.label === 'Session')?.submenu;
++  if (!sessionSubmenu) {
++    sessionSubmenu = new Menu();
++    const sessionItem = new MenuItem({ label: 'Session', submenu: sessionSubmenu });
++    const helpIndex = appMenu.items.findIndex(i => i.label === 'Help');
++    if (helpIndex >= 0) appMenu.insert(helpIndex, sessionItem);
++    else appMenu.append(sessionItem);
++  }
++  appendSessionItems(sessionSubmenu);
+ 
+   // Ensure "Help" submenu exists, then append our items
+   let helpSubmenu = appMenu.items.find(i => i.label === 'Help')?.submenu;
+   if (!helpSubmenu) {
+     helpSubmenu = new Menu();
+     // Place Help at the end for Windows/Linux conventions
+     appMenu.append(new MenuItem({ label: 'Help', submenu: helpSubmenu }));
+   }
