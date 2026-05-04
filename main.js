@@ -17,6 +17,8 @@ let tray = null;
 let isQuitting = false;
 let lastSavePath = null;  // (legacy) Remember where "Save" last wrote to (per session/window)
 let findModal = null;  // === Find modal ===
+let quickChatMenuInstalled = false;
+let promptCounter = 0;
 let appIconImage = null;  // Cached icon images
 let trayImage24 = null;  // Cached icon images
 
@@ -258,10 +260,50 @@ function quoteify(text) {
     .join('\n');
 }
 
+function getQuickDisplayName(winOrId) {
+  const win = (typeof winOrId === 'number') ? getQuickById(winOrId) : winOrId;
+  if (!win || win.isDestroyed?.()) return 'Quick Chat';
+
+  const id = (typeof win.__quickId === 'number') ? win.__quickId : null;
+  const customName = String(win.__quickName ?? '').trim();
+
+  if (id !== null && customName) return `Quick Chat ${id}: ${customName}`;
+  if (id !== null) return `Quick Chat ${id}`;
+  return customName || 'Quick Chat';
+}
+
+function updateQuickWindowTitle(win) {
+  try {
+    if (!win || win.isDestroyed?.()) return;
+    if (win.__copilotRole !== 'quick') return;
+    win.setTitle(`Copilot ${getQuickDisplayName(win)}`);
+  } catch {}
+}
+
 function setRoleTitle(win, role, id) {
   try {
     if (role === 'main') win.setTitle('Copilot Main Chat');
-    else win.setTitle(`Copilot Quick Chat ${id}`);
+    else {
+      if (typeof id === 'number' && typeof win.__quickId !== 'number') {
+        win.__quickId = id;
+      }
+      updateQuickWindowTitle(win);
+    }
+  } catch {}
+}
+
+function closeQuickChatWindow(win) {
+  try {
+    if (!win || win.isDestroyed?.()) return;
+    win.destroy();
+  } catch {}
+}
+
+function closeAllQuickChatWindows() {
+  try {
+    for (const win of [...quickChatWindows]) {
+      closeQuickChatWindow(win);
+    }
   } catch {}
 }
 
@@ -310,16 +352,305 @@ function registerQuickWindow(win) {
   if (!win) return;
   quickChatWindows = quickChatWindows.filter(w => w && !w.isDestroyed());
   if (!quickChatWindows.includes(win)) quickChatWindows.push(win);
+  refreshQuickChatMenu();
 }
 
 function onQuickFocus(win) {
-  try { activeQuickChatId = win.__quickId || null; } catch {}
+  try { activeQuickChatId = win.__quickId || null;
+  } catch {}
+  refreshQuickChatMenu();
 }
 
 function onQuickClosed(win) {
   quickChatWindows = quickChatWindows.filter(w => w && w !== win && !w.isDestroyed());
   if (activeQuickChatId && win && win.__quickId === activeQuickChatId) {
     activeQuickChatId = quickChatWindows.at(-1)?.__quickId || null;
+  }
+  refreshQuickChatMenu();
+}
+
+function promptForText(parentWin, { title = 'Rename', message = 'Name:', defaultValue = '' } = {}) {
+  return new Promise(resolve => {
+    const channel = `copilot:prompt-response:${++promptCounter}`;
+    let resolved = false;
+    let promptWin = null;
+
+    const finish = (value) => {
+      if (resolved) return;
+      resolved = true;
+      try { ipcMain.removeAllListeners(channel); } catch {}
+      try {
+        if (promptWin && !promptWin.isDestroyed()) promptWin.close();
+      } catch {}
+      resolve(value);
+    };
+
+    try {
+      promptWin = new BrowserWindow({
+        parent: parentWin || mainWindow,
+        modal: true,
+        width: 420,
+        height: 170,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        show: false,
+        title,
+        autoHideMenuBar: true,
+        webPreferences: {
+          nodeIntegration: true,
+          contextIsolation: false
+        }
+      });
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: system-ui, Segoe UI, Arial, sans-serif;
+      margin: 14px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 8px;
+      font-size: 13px;
+    }
+    .actions {
+      margin-top: 14px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <label for="value">${String(message).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</label>
+  <input id="value" type="text" value="${String(defaultValue).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" autofocus>
+  <div class="actions">
+    <button id="cancel">Cancel</button>
+    <button id="ok">OK</button>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    const channel = ${JSON.stringify(channel)};
+    const input = document.getElementById('value');
+    function submit(ok) {
+      ipcRenderer.send(channel, {
+        ok,
+        value: ok ? input.value : null
+      });
+    }
+    document.getElementById('ok').onclick = () => submit(true);
+    document.getElementById('cancel').onclick = () => submit(false);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') submit(true);
+      if (e.key === 'Escape') submit(false);
+    });
+  </script>
+</body>
+</html>`;
+
+      ipcMain.once(channel, (_event, payload) => {
+        finish(payload?.ok ? String(payload.value ?? '').trim() : null);
+      });
+
+      promptWin.removeMenu();
+      promptWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html));
+      promptWin.once('ready-to-show', () => {
+        try { promptWin.show(); promptWin.focus(); } catch {}
+      });
+      promptWin.on('closed', () => finish(null));
+    } catch (err) {
+      console.error('promptForText failed:', err);
+      finish(null);
+    }
+  });
+}
+
+async function renameQuickChatWindow(win) {
+  try {
+    if (!win || win.isDestroyed?.()) return;
+    const current = String(win.__quickName ?? '').trim();
+    const value = await promptForText(BrowserWindow.getFocusedWindow() || mainWindow, {
+      title: 'Rename Quick Chat',
+      message: `New name for ${getQuickDisplayName(win)}:`,
+      defaultValue: current
+    });
+    if (value === null) return;
+    win.__quickName = value;
+    updateQuickWindowTitle(win);
+    refreshQuickChatMenu();
+  } catch (err) {
+    console.error('Rename Quick Chat failed:', err);
+  }
+}
+
+function buildQuickChatManagerMenuTemplate() {
+  const items = [];
+  const wins = quickChatWindows
+    .filter(w => w && !w.isDestroyed() && typeof w.__quickId === 'number')
+    .sort((a, b) => a.__quickId - b.__quickId);
+
+  items.push({
+    label: 'New Quick Chat Window',
+    accelerator: 'Ctrl+Alt+N',
+    click: () => {
+      try { reveal(createQuickChatWindow()); }
+      catch (err) { console.error('Quick Chat Manager new window failed:', err); }
+    }
+  });
+
+  items.push({
+    label: 'Show Active Quick Chat',
+    accelerator: 'Ctrl+Alt+2',
+    enabled: !!getActiveQuickChatWindow({ createIfMissing: false }),
+    click: () => {
+      try {
+        const win = getActiveQuickChatWindow({ createIfMissing: true });
+        if (win) reveal(win);
+      } catch (err) {
+        console.error('Quick Chat Manager show active failed:', err);
+      }
+    }
+  });
+
+  if (!wins.length) {
+    items.push({ type: 'separator' });
+    items.push({ label: 'No Quick Chat Windows Open', enabled: false });
+    return items;
+  }
+
+  items.push({ type: 'separator' });
+
+  for (const win of wins) {
+    const id = win.__quickId;
+    const pinned = !!win.isAlwaysOnTop?.();
+    const active = activeQuickChatId === id;
+    const labelPrefix = `${pinned ? '📌 ' : ''}${active ? '● ' : ''}`;
+
+    items.push({
+      label: `${labelPrefix}${getQuickDisplayName(win)}`,
+      submenu: [
+        {
+          label: 'Bring to Front',
+          click: () => reveal(win)
+        },
+        {
+          label: 'Send Selection Here',
+          click: async () => {
+            const src = BrowserWindow.getFocusedWindow() || mainWindow;
+            await sendSelectionToQuick(src, {
+              mode: SEND_MODE.PLAIN,
+              autoSubmit: false,
+              targetQuickId: id
+            });
+          }
+        },
+        {
+          label: 'Send Selection as Quote Here',
+          click: async () => {
+            const src = BrowserWindow.getFocusedWindow() || mainWindow;
+            await sendSelectionToQuick(src, {
+              mode: SEND_MODE.QUOTE,
+              autoSubmit: false,
+              targetQuickId: id
+            });
+          }
+        },
+        {
+          label: 'Send Selection & Auto Submit Here',
+          click: async () => {
+            const src = BrowserWindow.getFocusedWindow() || mainWindow;
+            await sendSelectionToQuick(src, {
+              mode: SEND_MODE.PLAIN,
+              autoSubmit: true,
+              targetQuickId: id
+            });
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Pin Always on Top',
+          type: 'checkbox',
+          checked: pinned,
+          click: () => {
+            try {
+              win.setAlwaysOnTop(!win.isAlwaysOnTop());
+              refreshQuickChatMenu();
+            } catch (err) {
+              console.error('Quick Chat pin toggle failed:', err);
+            }
+          }
+        },
+        {
+          label: 'Rename...',
+          click: () => renameQuickChatWindow(win)
+        },
+        { type: 'separator' },
+        {
+          label: 'Close',
+          click: () => closeQuickChatWindow(win)
+        }
+      ]
+    });
+  }
+
+  items.push({ type: 'separator' });
+  items.push({
+    label: 'Close All Quick Chat Windows',
+    click: () => closeAllQuickChatWindows()
+  });
+
+  return items;
+}
+
+function installQuickChatMenu(appMenu) {
+  if (!appMenu) return;
+
+  const label = 'Quick Chat';
+  const rebuilt = new Menu();
+
+  const quickChatMenu = new MenuItem({
+    label,
+    submenu: Menu.buildFromTemplate(buildQuickChatManagerMenuTemplate())
+  });
+
+
+  let inserted = false;
+  for (const item of appMenu.items) {
+  if (!item || item.label === label) continue;
+
+  rebuilt.append(item);
+
+  if (!inserted && item.label === 'Edit') {
+  rebuilt.append(quickChatMenu);
+  inserted = true;
+  }
+  }
+
+  if (!inserted) {
+  rebuilt.append(quickChatMenu);
+  }
+
+  Menu.setApplicationMenu(rebuilt);
+  quickChatMenuInstalled = true;
+}
+
+function refreshQuickChatMenu() {
+  try {
+    const appMenu = Menu.getApplicationMenu();
+    if (!appMenu || !quickChatMenuInstalled) return;
+    installQuickChatMenu(appMenu);
+  } catch (err) {
+    console.error('refreshQuickChatMenu failed:', err);
   }
 }
 
@@ -482,9 +813,9 @@ function createQuickChatWindow() {
   win.__copilotRole = 'quick';
   win.__quickId = id;
   win.__boundsKey = boundsKey;
-  setRoleTitle(win, 'quick', id);
-  registerQuickWindow(win);
+  updateQuickWindowTitle(win);
   activeQuickChatId = id;
+  registerQuickWindow(win);
 
   win.setMenuBarVisibility(true);
   attachWindowStatePersistence(win, boundsKey, { hideOnClose: true });
@@ -2085,6 +2416,8 @@ function augmentApplicationMenu(win) {
     appMenu.insert(1, new MenuItem({ label: 'Edit', submenu: editSubmenu }));
   }
   appendEditItems(editSubmenu);
+
+  installQuickChatMenu(appMenu);
 
   // Ensure "Help" submenu exists, then append our items
   let helpSubmenu = appMenu.items.find(i => i.label === 'Help')?.submenu;
