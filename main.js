@@ -353,12 +353,14 @@ function registerQuickWindow(win) {
   quickChatWindows = quickChatWindows.filter(w => w && !w.isDestroyed());
   if (!quickChatWindows.includes(win)) quickChatWindows.push(win);
   refreshQuickChatMenu();
+  refreshTrayMenu();
 }
 
 function onQuickFocus(win) {
   try { activeQuickChatId = win.__quickId || null;
   } catch {}
   refreshQuickChatMenu();
+  refreshTrayMenu();
 }
 
 function onQuickClosed(win) {
@@ -367,6 +369,7 @@ function onQuickClosed(win) {
     activeQuickChatId = quickChatWindows.at(-1)?.__quickId || null;
   }
   refreshQuickChatMenu();
+  refreshTrayMenu();
 }
 
 function promptForText(parentWin, { title = 'Rename', message = 'Name:', defaultValue = '' } = {}) {
@@ -2121,6 +2124,216 @@ async function openCurrentUrlExternal() {
   }
 }
 
+// ============================================================================
+// Tray maintenance helpers
+// ============================================================================
+function getLogsFolderPath() {
+  try {
+    const logsPath = app.getPath('logs');
+    fs.mkdirSync(logsPath, { recursive: true });
+    return logsPath;
+  } catch {
+    const fallback = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+}
+
+function getConfigFilePath() {
+  return path.join(app.getPath('userData'), 'config.json');
+}
+
+async function ensureConfigFile() {
+  const configPath = getConfigFilePath();
+  try {
+    await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.promises.access(configPath, fs.constants.F_OK);
+  } catch {
+    const initialConfig = {
+      app: app.getName?.() || 'copilot-for-linux',
+      version: app.getVersion?.() || '0.0.0',
+      createdAt: new Date().toISOString(),
+      notes: 'User-editable host app config placeholder.'
+    };
+    await fs.promises.writeFile(
+      configPath,
+      JSON.stringify(initialConfig, null, 2) + '\n',
+      'utf8'
+    );
+  }
+  return configPath;
+}
+
+async function openPathWithError(title, targetPath) {
+  try {
+    const openError = await shell.openPath(targetPath);
+    if (openError) safeShowError(title, String(openError));
+  } catch (err) {
+    console.error(`${title} failed:`, err);
+    safeShowError(title, String(err?.message ?? err));
+  }
+}
+
+async function openLogsFolder() {
+  await openPathWithError('Open Logs Folder failed', getLogsFolderPath());
+}
+
+async function openConfigFile() {
+  const configPath = await ensureConfigFile();
+  await openPathWithError('Open Config File failed', configPath);
+}
+
+function toggleActiveWindowAlwaysOnTop() {
+  try {
+    const win = getActiveCopilotWindow();
+    if (!win || win.isDestroyed?.()) return;
+    win.setAlwaysOnTop(!win.isAlwaysOnTop());
+    refreshQuickChatMenu();
+    refreshTrayMenu();
+  } catch (err) {
+    console.error('Toggle Always on Top failed:', err);
+    safeShowError('Toggle Always on Top failed', String(err?.message ?? err));
+  }
+}
+
+function showAboutDialog() {
+  try {
+    const info = getRuntimeInfo();
+    dialog.showMessageBox({
+      type: 'info',
+      buttons: ['OK'],
+      defaultId: 0,
+      title: `About ${info.name}`,
+      message: `${info.name}`,
+      detail: info.detail,
+      noLink: true,
+      icon: appIconImage
+    }).catch(err => {
+      console.error('About dialog failed:', err);
+    });
+  } catch (err) {
+    console.error('About dialog failed:', err);
+  }
+}
+
+function buildTrayMenuTemplate() {
+  const activeWindow = getActiveCopilotWindow();
+  const activeQuick = getActiveQuickChatWindow({ createIfMissing: false });
+  const activeWindowIsAlwaysOnTop = !!activeWindow?.isAlwaysOnTop?.();
+  const mainVisible = !!mainWindow && !mainWindow.isDestroyed?.() && mainWindow.isVisible?.();
+
+  return [
+    {
+      label: 'Show',
+      enabled: !!mainWindow && !mainWindow.isDestroyed?.(),
+      click: () => {
+        if (mainWindow) reveal(mainWindow);
+        refreshTrayMenu();
+      }
+    },
+    {
+      label: 'Hide',
+      enabled: mainVisible,
+      click: () => {
+        if (mainWindow) mainWindow.hide();
+        refreshTrayMenu();
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'New Quick Chat',
+      accelerator: 'Ctrl+Alt+N',
+      click: () => {
+        try { reveal(createQuickChatWindow()); }
+        catch (err) { console.error('Tray New Quick Chat failed:', err); }
+      }
+    },
+    {
+      label: 'Show Active Quick Chat',
+      accelerator: 'Ctrl+Alt+2',
+      enabled: !!activeQuick,
+      click: () => {
+        const win = getActiveQuickChatWindow({ createIfMissing: false });
+        if (win) reveal(win);
+      }
+    },
+    {
+      label: 'Save Chat Pane',
+      accelerator: 'Ctrl+S',
+      enabled: !!activeWindow && !activeWindow.isDestroyed?.(),
+      click: async () => {
+        const win = getActiveCopilotWindow();
+        if (win) await promptSaveChatPane(win);
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Reload',
+      accelerator: 'Ctrl+R',
+      click: () => reloadCopilot({ ignoreCache: false })
+    },
+    {
+      label: 'Toggle Always on Top',
+      type: 'checkbox',
+      checked: activeWindowIsAlwaysOnTop,
+      enabled: !!activeWindow && !activeWindow.isDestroyed?.(),
+      click: () => toggleActiveWindowAlwaysOnTop()
+    },
+    {
+      label: 'Clear Session/Cache',
+      submenu: [
+        {
+          label: 'Clear Copilot Cache',
+          click: async () => {
+            await clearCopilotCache();
+          }
+        },
+        {
+          label: 'Clear Cookies / Sign Out',
+          click: async () => {
+            await clearCookiesAndSignOut();
+          }
+        }
+      ]
+    },
+    { type: 'separator' },
+    {
+      label: 'Open Logs Folder',
+      click: async () => {
+        await openLogsFolder();
+      }
+    },
+    {
+      label: 'Open Config File',
+      click: async () => {
+        await openConfigFile();
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'About',
+      click: () => showAboutDialog()
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ];
+}
+
+function refreshTrayMenu() {
+  try {
+    if (!tray) return;
+    tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
+  } catch (err) {
+    console.error('refreshTrayMenu failed:', err);
+  }
+}
+
 app.setName('copilot-for-linux');  // Shows as WMClass "yourapp" or "YourApp"
 app.setAppUserModelId('your.company.copilot');
 
@@ -3860,52 +4073,7 @@ function createTray() {
   tray = new Tray(smallImage || appIconImage || nativeImage.createFromPath(path.join(__dirname, 'assets', 'copilot-for-linux.png')));
 
   tray.setToolTip('Microsoft Copilot');
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Show',
-      click: () => { if (mainWindow) reveal(mainWindow); }
-    },
-    {
-      label: 'Hide',
-      click: () => { if (mainWindow) mainWindow.hide(); }
-    },
-    { type: 'separator' },
-
-    // ---- NEW: About item ----
-    {
-      label: 'About',
-      click: async () => {
-        const info = getRuntimeInfo();
-        try {
-          await dialog.showMessageBox({
-            type: 'info',
-            buttons: ['OK'],
-            defaultId: 0,
-            title: `About ${info.name}`,
-            message: `${info.name}`,
-            detail: info.detail,
-            noLink: true,
-            icon: appIconImage
-          });
-        } catch (err) {
-          console.error('About dialog failed:', err);
-        }
-      }
-    },
-
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        isQuitting = true; // so close handler doesn't re-hide
-        app.quit();
-      }
-    }
-  ]);
-
-  tray.setContextMenu(contextMenu);
-
+  refreshTrayMenu();
   // Left-click toggles window visibility
   tray.on('click', () => {
     if (!mainWindow) return;
@@ -3914,6 +4082,7 @@ function createTray() {
     } else {
       reveal(mainWindow);
     }
+  refreshTrayMenu();
   });
 }
 
