@@ -2216,6 +2216,93 @@ function showAboutDialog() {
   }
 }
 
+function showApplicationHelp() {
+  let helpWin;
+
+  try {
+    const helpPath = path.join(app.getAppPath(), 'assets', 'help.md');
+    const markdown = fs.readFileSync(helpPath, 'utf8');
+
+    // Reuse your Turndown / Markdown-friendly styling philosophy:
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Copilot for Linux — Help</title>
+<style>
+  body {
+    font-family: system-ui, Segoe UI, Arial, sans-serif;
+    margin: 18px;
+    line-height: 1.5;
+    color: #222;
+    background: #fff;
+  }
+  h1, h2, h3 { margin-top: 1.2em; }
+  table {
+    border-collapse: collapse;
+    margin: 0.8em 0;
+    width: 100%;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    vertical-align: top;
+  }
+  code, pre {
+    font-family: Consolas, Menlo, monospace;
+    background: #f5f7fa;
+  }
+  pre {
+    padding: 10px;
+    overflow: auto;
+    border-radius: 6px;
+  }
+</style>
+</head>
+<body>
+<pre id="md" style="white-space: pre-wrap;"></pre>
+
+<script>
+  // Render markdown as-is (readable, fast, no dependency),
+  // OR swap this for marked.js later if you want full HTML rendering.
+  document.getElementById('md').textContent = ${JSON.stringify(markdown)};
+</script>
+</body>
+</html>`;
+
+    helpWin = new BrowserWindow({
+      width: 900,
+      height: 700,
+      title: 'Copilot for Linux — Help',
+      resizable: true,
+      minimizable: true,
+      maximizable: true,
+      show: false,
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+
+    helpWin.loadURL(
+      'data:text/html;charset=UTF-8,' + encodeURIComponent(html)
+    );
+
+    helpWin.once('ready-to-show', () => {
+      helpWin.show();
+      helpWin.focus();
+    });
+
+  } catch (err) {
+    console.error('Failed to open Help window:', err);
+    dialog.showErrorBox(
+      'Help Error',
+      String(err?.message ?? err)
+    );
+  }
+}
+
 function buildTrayMenuTemplate() {
   const activeWindow = getActiveCopilotWindow();
   const activeQuick = getActiveQuickChatWindow({ createIfMissing: false });
@@ -2677,6 +2764,14 @@ function appendEditItems(editSubmenu) {
 // --- Help menu: add About screen (under the menu bar) ----------------------
 function appendHelpItems(helpSubmenu) {
   const template = [
+    new MenuItem({
+      label: 'Application Help',
+      accelerator: 'F1',
+      click: () => {
+        showApplicationHelp();
+      }
+    }),
+    new MenuItem({ type: 'separator' }),
     new MenuItem({
       label: 'About',
       // Optional: make F1 open About; change/remove if you already use F1 elsewhere
