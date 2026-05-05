@@ -2965,8 +2965,7 @@ function appendHelpItems(helpSubmenu) {
     new MenuItem({ type: 'separator' }),
     new MenuItem({
       label: 'About',
-      // Optional: make F1 open About; change/remove if you already use F1 elsewhere
-      accelerator: 'F1',
+      accelerator: 'Shift+F1',
       click: async () => {
         try {
           const info = getRuntimeInfo();
