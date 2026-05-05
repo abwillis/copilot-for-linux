@@ -5,9 +5,110 @@ const fs = require('fs');
 const TurndownService = require('turndown');
 const turndownPluginGfm = require('turndown-plugin-gfm');
 
-// Force a persistent Chromium storage partition for Copilot.
-// Electron: partitions starting with "persist:" use a persistent session. [5](https://www.electronjs.org/docs/latest/api/session)
-const COPILOT_PARTITION = String(process.env.COPILOT_PARTITION ?? 'persist:copilot-for-linux').trim();
+// ============================================================================
+// User preferences/config under app.getPath('userData')
+// ============================================================================
+const DEFAULT_APP_CONFIG = Object.freeze({
+  copilotUrl: 'https://m365.cloud.microsoft/chat',
+  partition: 'persist:copilot-for-linux',
+  enableLayoutCss: true,
+  enableDirectOpen: true,
+  enableQuickChat: true,
+  defaultExportFormat: 'md',
+  quickPasteDelayMs: 3000,
+  findContentVisibilityOverride: true,
+  devToolsEnabled: true
+});
+
+let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
+let COPILOT_PARTITION = DEFAULT_APP_CONFIG.partition;
+let COPILOT_URL = DEFAULT_APP_CONFIG.copilotUrl;
+
+function getConfigFilePath() {
+  return path.join(app.getPath('userData'), 'config.json');
+}
+
+function normalizeBooleanConfig(value, fallback) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lowered = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(lowered)) return true;
+    if (['false', '0', 'no', 'off'].includes(lowered)) return false;
+  }
+  return fallback;
+}
+
+function normalizePositiveIntegerConfig(value, fallback) {
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 0) return Math.round(n);
+  return fallback;
+}
+
+function normalizeExportFormat(value, fallback) {
+  const fmt = String(value ?? fallback).trim().toLowerCase().replace(/^\./, '');
+  return ['md', 'markdown', 'pdf', 'html', 'mhtml', 'txt'].includes(fmt) ? fmt : fallback;
+}
+
+function normalizeAppConfig(raw = {}) {
+  const source = (raw && typeof raw === 'object') ? raw : {};
+  const merged = { ...DEFAULT_APP_CONFIG, ...source };
+
+  merged.copilotUrl = String(merged.copilotUrl || DEFAULT_APP_CONFIG.copilotUrl).trim();
+  merged.partition = String(process.env.COPILOT_PARTITION ?? merged.partition ?? DEFAULT_APP_CONFIG.partition).trim();
+  merged.enableLayoutCss = normalizeBooleanConfig(merged.enableLayoutCss, DEFAULT_APP_CONFIG.enableLayoutCss);
+  merged.enableDirectOpen = normalizeBooleanConfig(merged.enableDirectOpen, DEFAULT_APP_CONFIG.enableDirectOpen);
+  merged.enableQuickChat = normalizeBooleanConfig(merged.enableQuickChat, DEFAULT_APP_CONFIG.enableQuickChat);
+  merged.defaultExportFormat = normalizeExportFormat(merged.defaultExportFormat, DEFAULT_APP_CONFIG.defaultExportFormat);
+  merged.quickPasteDelayMs = normalizePositiveIntegerConfig(merged.quickPasteDelayMs, DEFAULT_APP_CONFIG.quickPasteDelayMs);
+  merged.findContentVisibilityOverride = normalizeBooleanConfig(merged.findContentVisibilityOverride, DEFAULT_APP_CONFIG.findContentVisibilityOverride);
+  merged.devToolsEnabled = normalizeBooleanConfig(merged.devToolsEnabled, DEFAULT_APP_CONFIG.devToolsEnabled);
+
+  if (!merged.copilotUrl) merged.copilotUrl = DEFAULT_APP_CONFIG.copilotUrl;
+  if (!merged.partition) merged.partition = DEFAULT_APP_CONFIG.partition;
+
+  return merged;
+}
+
+function writeConfigFile(configPath, config) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+}
+
+function loadAppConfig() {
+  const configPath = getConfigFilePath();
+  let parsed = null;
+
+  try {
+    if (fs.existsSync(configPath)) {
+      parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  } catch (err) {
+    console.error('Failed to read config.json; using defaults:', err);
+  }
+
+  APP_CONFIG = normalizeAppConfig(parsed ?? DEFAULT_APP_CONFIG);
+  COPILOT_PARTITION = APP_CONFIG.partition;
+  COPILOT_URL = APP_CONFIG.copilotUrl;
+  QUICK_PASTE_DELAY_MS = APP_CONFIG.quickPasteDelayMs;
+
+  try {
+    // Keep the file self-documenting and add any newly introduced defaults.
+    writeConfigFile(configPath, APP_CONFIG);
+  } catch (err) {
+    console.error('Failed to write config.json:', err);
+  }
+
+  return APP_CONFIG;
+}
+
+function getAppConfig() {
+  return APP_CONFIG;
+}
+
+async function ensureConfigFile() {
+  loadAppConfig();
+  return getConfigFilePath();
+}
 
 let mainWindow = null;
 let quickChatWindows = [];         // Multi-Quick Chat windows
@@ -25,12 +126,12 @@ let trayImage24 = null;  // Cached icon images
 // --- Clipboard-based Quick Chat paste timing ---------------------------------
 // Requirement: copy selection -> open/focus Quick Chat -> wait 3s -> paste.
 const QUICK_PASTE_NEW_WINDOW_DELAY_MS = 300;
-const QUICK_PASTE_DELAY_MS = 3000; // NOTE: This is now a fallback timeout only. Primary path waits for input readiness.
+let QUICK_PASTE_DELAY_MS = DEFAULT_APP_CONFIG.quickPasteDelayMs; // NOTE: This is now a fallback timeout only. Primary path waits for input readiness.
 const QUICK_PASTE_POST_KEY_DELAY_MS = 40; // tiny gap between paste and optional Enter
 
 
 // --- Quick Chat / IPC constants --------------------------------------------
-const COPILOT_URL = 'https://m365.cloud.microsoft/chat';
+// COPILOT_URL is loaded from config.json under userData.
 
 const IPC = Object.freeze({
   SEND_SELECTION: 'copilot:send-selection',
@@ -123,6 +224,7 @@ function itemUrlMatchesDirectOpenRequest(item, request) {
 }
 
 function registerDirectOpenDownloadHandler() {
+  if (!APP_CONFIG.enableDirectOpen) return;
   const ses = session.fromPartition(COPILOT_PARTITION);
   if (!ses || ses.__copilotDirectOpenDownloadHandlerAttached) return;
   ses.__copilotDirectOpenDownloadHandlerAttached = true;
@@ -669,6 +771,7 @@ function buildQuickChatManagerMenuTemplate() {
 }
 
 function installQuickChatMenu(appMenu) {
+  if (!APP_CONFIG.enableQuickChat) return;
   if (!appMenu) return;
 
   const label = 'Quick Chat';
@@ -839,6 +942,7 @@ async function chooseQuickChatTargetDialog(parentWin) {
 }
 
 function createQuickChatWindow() {
+  if (!APP_CONFIG.enableQuickChat) return null;
   quickChatIdCounter += 1;
   const id = quickChatIdCounter;
   const boundsKey = `quick-${id}`;
@@ -858,7 +962,7 @@ function createQuickChatWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       partition: COPILOT_PARTITION,
-      devTools: true,
+      devTools: !!APP_CONFIG.devToolsEnabled,
       backgroundThrottling: true,
       spellcheck: false
     },
@@ -900,7 +1004,7 @@ function createQuickChatWindow() {
     try {
       menu = Menu.buildFromTemplate(
         buildContextMenuTemplate(win, params, {
-          includeQuickChatFeatures: true,
+          includeQuickChatFeatures: APP_CONFIG.enableQuickChat,
           includeChatPaneFeatures: true,
           includeMarkdownExport: true
         })
@@ -1135,6 +1239,12 @@ function attachCSSAndLayoutHandlers(win, { role = 'window', revealOnReady = true
   if (!win?.webContents) return;
 
   ensureDidStopLoadingHandler(win.webContents);
+  if (!APP_CONFIG.enableLayoutCss) {
+    win.once('ready-to-show', () => {
+      if (revealOnReady) reveal(win);
+    });
+    return;
+  }
 
   try {
     win.webContents.once('did-stop-loading', () => {
@@ -1889,6 +1999,7 @@ function injectCSSIntoAllFrames(win, css) {
 }
 
 function applyMaxLayoutCSS(win, { specificMessageId } = {}) {
+  if (!APP_CONFIG.enableLayoutCss) return;
   if (!win) return;
   const cacheKey = specificMessageId || 'default';
   let css = maxLayoutCssCache.get(cacheKey);
@@ -2139,30 +2250,6 @@ function getLogsFolderPath() {
   }
 }
 
-function getConfigFilePath() {
-  return path.join(app.getPath('userData'), 'config.json');
-}
-
-async function ensureConfigFile() {
-  const configPath = getConfigFilePath();
-  try {
-    await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.promises.access(configPath, fs.constants.F_OK);
-  } catch {
-    const initialConfig = {
-      app: app.getName?.() || 'copilot-for-linux',
-      version: app.getVersion?.() || '0.0.0',
-      createdAt: new Date().toISOString(),
-      notes: 'User-editable host app config placeholder.'
-    };
-    await fs.promises.writeFile(
-      configPath,
-      JSON.stringify(initialConfig, null, 2) + '\n',
-      'utf8'
-    );
-  }
-  return configPath;
-}
 
 async function openPathWithError(title, targetPath) {
   try {
@@ -2305,7 +2392,7 @@ function showApplicationHelp() {
 
 function buildTrayMenuTemplate() {
   const activeWindow = getActiveCopilotWindow();
-  const activeQuick = getActiveQuickChatWindow({ createIfMissing: false });
+  const activeQuick = APP_CONFIG.enableQuickChat ? getActiveQuickChatWindow({ createIfMissing: false }) : null;
   const activeWindowIsAlwaysOnTop = !!activeWindow?.isAlwaysOnTop?.();
   const mainVisible = !!mainWindow && !mainWindow.isDestroyed?.() && mainWindow.isVisible?.();
 
@@ -2498,7 +2585,7 @@ function openFindModal(parent) {
   // Force all conversation messages to fully render so findInPage can
   // reach them.  Runs before the early-return so a re-focused modal
   // re-applies the override if the page navigated while it was hidden.
-  enableFindContentVisibility(parent);
+  if (APP_CONFIG.findContentVisibilityOverride) enableFindContentVisibility(parent);
   if (findModal && !findModal.isDestroyed()) {
     findModal.show(); findModal.focus(); return;
   }
@@ -2677,6 +2764,7 @@ function buildFindContentVisibilityCSS() {
 }
 
 function enableFindContentVisibility(win) {
+  if (!APP_CONFIG.findContentVisibilityOverride) return;
   if (!win?.webContents) return;
   // Already active on this webContents — nothing to do
   if (findCVKey && findCVTargetWC === win.webContents) return;
@@ -2897,7 +2985,8 @@ function augmentApplicationMenu(win) {
   // installQuickChatMenu() rebuilds and applies the full application menu.
   // Call it last so the rebuilt menu includes File/Edit/Help and is not
   // overwritten by re-applying the pre-rebuild appMenu object.
-  installQuickChatMenu(appMenu);
+  if (APP_CONFIG.enableQuickChat) installQuickChatMenu(appMenu);
+  else Menu.setApplicationMenu(appMenu);
 }
 
 
@@ -3035,6 +3124,7 @@ async function buildSelectionEnvelope(sourceWin, opts) {
 }
 
 async function sendSelectionToQuick(sourceWin, opts) {
+  if (!APP_CONFIG.enableQuickChat) return;
   const { targetQuickId } = normalizeSendOptions(opts);
   const quick = getTargetQuickWindow(targetQuickId, { createIfMissing: true });
   if (!quick || quick.isDestroyed()) return;
@@ -3122,6 +3212,7 @@ ipcMain.on(IPC.SEND_SELECTION, async (event, opts) => {
 });
 
 ipcMain.on(IPC.DIRECT_OPEN_LINK, (event, payload) => {
+  if (!APP_CONFIG.enableDirectOpen) return;
   try {
     pruneExpiredDirectOpenRequests();
 
@@ -3150,6 +3241,7 @@ ipcMain.on(IPC.PRELOAD_PING, (event, payload) => {
 });
 
 ipcMain.on(IPC.QUICK_NEW, () => {
+  if (!APP_CONFIG.enableQuickChat) return;
   try { reveal(createQuickChatWindow()); }
   catch (e) { console.error('IPC quick new failed:', e); }
 });
@@ -3563,21 +3655,36 @@ async function saveChatPaneByExtension(win, filePath) {
   }
 }
 
+function getDefaultExportExtension() {
+  const fmt = normalizeExportFormat(APP_CONFIG.defaultExportFormat, DEFAULT_APP_CONFIG.defaultExportFormat);
+  return fmt === 'markdown' ? 'md' : fmt;
+}
+
+function getSaveDialogFilters() {
+  const filters = [
+    { name: 'Markdown', extensions: ['md', 'markdown'] },
+    { name: 'PDF', extensions: ['pdf'] },
+    { name: 'Web Page, HTML (clean)', extensions: ['html'] },
+    { name: 'Web Archive (MHTML)', extensions: ['mhtml'] },
+    { name: 'Plain Text', extensions: ['txt'] }
+  ];
+  const ext = getDefaultExportExtension();
+  const idx = filters.findIndex(f => f.extensions.includes(ext));
+  if (idx > 0) {
+    const [preferred] = filters.splice(idx, 1);
+    filters.unshift(preferred);
+  }
+  return filters;
+}
+
 // --- Shared helper: prompt to Save Chat Pane (HTML or MHTML) ---
 async function promptSaveChatPane(win) {
   if (!win) return;
   try {
     const { filePath, canceled } = await dialog.showSaveDialog(win, {
       title: 'Save Chat Pane As',
-      defaultPath: 'copilot-chat.md',  // Default to Markdown file name
-      // Put Markdown first so it's the preselected filter
-      filters: [
-        { name: 'Markdown', extensions: ['md', 'markdown'] },
-        { name: 'PDF', extensions: ['pdf'] },
-        { name: 'Web Page, HTML (clean)', extensions: ['html'] },
-        { name: 'Web Archive (MHTML)', extensions: ['mhtml'] },
-        { name: 'Plain Text', extensions: ['txt'] }
-      ],
+      defaultPath: `copilot-chat.${getDefaultExportExtension()}`,
+      filters: getSaveDialogFilters(),
     });
     if (canceled || !filePath) return;
     await saveChatPaneByExtension(win, filePath);
@@ -3943,7 +4050,7 @@ function createWindow() {
       contextIsolation: true,      // safer: isolates preload from page
       preload: path.join(__dirname, 'preload.js'), // optional: expose safe APIs
       partition: COPILOT_PARTITION,
-      devTools: true,
+      devTools: !!APP_CONFIG.devToolsEnabled,
       backgroundThrottling: true,   // reduce CPU when hidden
       spellcheck: false            // disable if not required
     },
@@ -4034,7 +4141,7 @@ function createWindow() {
     try { 
       menu = Menu.buildFromTemplate(
         buildContextMenuTemplate(mainWindow, params, {
-          includeQuickChatFeatures: true,
+          includeQuickChatFeatures: APP_CONFIG.enableQuickChat,
           includeChatPaneFeatures: true,
           includeMarkdownExport: true
         })
@@ -4182,7 +4289,8 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
-  registerDirectOpenDownloadHandler();
+  loadAppConfig();
+  if (APP_CONFIG.enableDirectOpen) registerDirectOpenDownloadHandler();
   createWindow();
   createTray();
 //  createAppMenu();
