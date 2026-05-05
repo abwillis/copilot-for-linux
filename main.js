@@ -16,12 +16,14 @@ const DEFAULT_APP_CONFIG = Object.freeze({
   enableDirectOpen: true,
   enableQuickChat: true,
   defaultExportFormat: 'md',
-    quickPasteDelayMs: 3000,
-    findContentVisibilityOverride: true,
-    devToolsEnabled: true,
-    enableConsoleLogging: true,
-    enableFileLogging: true,
-    logFileName: 'copilot-for-linux.log'
+  defaultPaneExportProfile: 'cleanMarkdown',
+  defaultSelectionExportProfile: 'cleanMarkdown',
+  quickPasteDelayMs: 3000,
+  findContentVisibilityOverride: true,
+  devToolsEnabled: true,
+  enableConsoleLogging: true,
+  enableFileLogging: true,
+  logFileName: 'copilot-for-linux.log'
 });
 
 let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
@@ -125,6 +127,13 @@ function normalizeExportFormat(value, fallback) {
   return ['md', 'markdown', 'pdf', 'html', 'mhtml', 'txt'].includes(fmt) ? fmt : fallback;
 }
 
+function normalizeExportProfile(value, fallback) {
+  const profile = String(value ?? fallback).trim();
+  return ['cleanMarkdown', 'rawMarkdown', 'markdownWithMetadata', 'html', 'htmlArchive', 'plainText', 'pdf'].includes(profile)
+    ? profile
+    : fallback;
+}
+
 function normalizeAppConfig(raw = {}) {
   const source = (raw && typeof raw === 'object') ? raw : {};
   const merged = { ...DEFAULT_APP_CONFIG, ...source };
@@ -135,6 +144,8 @@ function normalizeAppConfig(raw = {}) {
   merged.enableDirectOpen = normalizeBooleanConfig(merged.enableDirectOpen, DEFAULT_APP_CONFIG.enableDirectOpen);
   merged.enableQuickChat = normalizeBooleanConfig(merged.enableQuickChat, DEFAULT_APP_CONFIG.enableQuickChat);
   merged.defaultExportFormat = normalizeExportFormat(merged.defaultExportFormat, DEFAULT_APP_CONFIG.defaultExportFormat);
+  merged.defaultPaneExportProfile = normalizeExportProfile(merged.defaultPaneExportProfile, DEFAULT_APP_CONFIG.defaultPaneExportProfile);
+  merged.defaultSelectionExportProfile = normalizeExportProfile(merged.defaultSelectionExportProfile, DEFAULT_APP_CONFIG.defaultSelectionExportProfile);
   merged.quickPasteDelayMs = normalizePositiveIntegerConfig(merged.quickPasteDelayMs, DEFAULT_APP_CONFIG.quickPasteDelayMs);
   merged.findContentVisibilityOverride = normalizeBooleanConfig(merged.findContentVisibilityOverride, DEFAULT_APP_CONFIG.findContentVisibilityOverride);
   merged.devToolsEnabled = normalizeBooleanConfig(merged.devToolsEnabled, DEFAULT_APP_CONFIG.devToolsEnabled);
@@ -1447,6 +1458,18 @@ function buildContextMenuTemplate(win, params, options = {}) {
             console.error('Copy Selection as Markdown failed:', err);
           }
         }
+      },
+      {
+        label: 'Save Selection as Markdown',
+        enabled: hasSelection,
+        click: async () => {
+          await saveSelectionAsMarkdown(win);
+        }
+      },
+      {
+        label: 'Save Selection As',
+        enabled: hasSelection,
+        submenu: Menu.buildFromTemplate(buildExportProfileMenuTemplate(win, EXPORT_SCOPES.SELECTION))
       },
       {
         label: 'Save Selection as Markdown',
@@ -3166,6 +3189,31 @@ async function getSelectionFragment(win) {
   return result;
 }
 
+async function getSelectionFragmentRaw(win) {
+  if (!win) return { hasSelection: false, html: '', text: '' };
+
+  const result = await win.webContents.executeJavaScript(`
+    (function() {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel || sel.rangeCount === 0) {
+        return { hasSelection: false, html: "", text: "" };
+      }
+
+      const range = sel.getRangeAt(0);
+      const container = document.createElement('div');
+      container.appendChild(range.cloneContents());
+
+      return {
+        hasSelection: true,
+        html: container.innerHTML,
+        text: String(sel.toString() || '')
+      };
+    })();
+  `).catch(() => ({ hasSelection: false, html: '', text: '' }));
+
+  return result;
+}
+
 // ============================================================================
 // Structured selection -> envelope -> quick chat inject (active OR specific #N)
 // ============================================================================
@@ -3583,6 +3631,149 @@ async function saveSelectionAsMarkdown(win) {
   }
 }
 
+async function saveSelectionAsCleanMarkdown(win, filePath) {
+  try {
+    if (!win) return;
+    const { hasSelection, html, text } = await getSelectionFragment(win);
+    if (!hasSelection) {
+      safeShowError('Export Selection', 'No selection found.');
+      return;
+    }
+
+    const md = htmlToMarkdown(html || text);
+    await fs.promises.writeFile(filePath, md, 'utf8');
+  } catch (err) {
+    console.error('Save Selection as Clean Markdown failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
+async function saveSelectionAsRawMarkdown(win, filePath) {
+  try {
+    if (!win) return;
+    const { hasSelection, html, text } = await getSelectionFragmentRaw(win);
+    if (!hasSelection) {
+      safeShowError('Export Selection', 'No selection found.');
+      return;
+    }
+
+    const safeHtml = stripExecutableBlocks(String(html || text || ''));
+    const md = htmlToMarkdown(safeHtml);
+    await fs.promises.writeFile(filePath, md, 'utf8');
+  } catch (err) {
+    console.error('Save Selection as Raw Markdown failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
+function buildExportMetadataHeader(win, { scope, profileKey, format } = {}) {
+  let title = 'Copilot Chat';
+  let sourceUrl = '';
+
+  try { title = win?.webContents?.getTitle?.() || title; } catch {}
+  try { sourceUrl = win?.webContents?.getURL?.() || ''; } catch {}
+
+  const metadata = [
+    '---',
+    `title: ${JSON.stringify(title)}`,
+    `scope: ${JSON.stringify(scope || '')}`,
+    `sourceUrl: ${JSON.stringify(sourceUrl)}`,
+    `exportedAt: ${JSON.stringify(new Date().toISOString())}`,
+    `profile: ${JSON.stringify(profileKey || '')}`,
+    `format: ${JSON.stringify(format || '')}`,
+    '---',
+    ''
+  ];
+
+  return metadata.join('\n');
+}
+
+async function saveSelectionAsMarkdownWithMetadata(win, filePath) {
+  try {
+    if (!win) return;
+    const { hasSelection, html, text } = await getSelectionFragment(win);
+    if (!hasSelection) {
+      safeShowError('Export Selection', 'No selection found.');
+      return;
+    }
+
+    const md = htmlToMarkdown(html || text);
+    const header = buildExportMetadataHeader(win, {
+      scope: EXPORT_SCOPES.SELECTION,
+      profileKey: 'markdownWithMetadata',
+      format: 'markdown'
+    });
+
+    await fs.promises.writeFile(filePath, `${header}\n${md}\n`, 'utf8');
+  } catch (err) {
+    console.error('Save Selection as Markdown with metadata failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
+async function saveSelectionAsHTML(win, filePath) {
+  try {
+    if (!win) return;
+    const { hasSelection, html, text } = await getSelectionFragment(win);
+    if (!hasSelection) {
+      safeShowError('Export Selection', 'No selection found.');
+      return;
+    }
+
+    const title = win.webContents.getTitle?.() || 'Copilot Selection';
+    const body = html || `<pre>${escapeHtmlForExport(text)}</pre>`;
+    const htmlDoc = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtmlForExport(title)}</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.5; color: #222; }
+h1,h2,h3,h4,h5 { margin: 0.6em 0 0.3em; }
+p { margin: 0.4em 0; }
+ul,ol { margin: 0.4em 0 0.4em 1.2em; }
+pre, code { font-family: Consolas, Menlo, monospace; }
+pre { background: #f5f7fa; border: 1px solid #e3e7ee; padding: 10px; border-radius: 6px; overflow: auto; }
+blockquote { border-left: 3px solid #cbd5e1; margin: 0.4em 0; padding: 0.2em 0.8em; color: #555; }
+table { border-collapse: collapse; }
+td, th { border: 1px solid #e5e7eb; padding: 6px 8px; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+
+    await fs.promises.writeFile(filePath, htmlDoc, 'utf8');
+  } catch (err) {
+    console.error('Save Selection as HTML failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
+async function saveSelectionAsText(win, filePath) {
+  try {
+    if (!win) return;
+    const { hasSelection, html, text } = await getSelectionFragment(win);
+    if (!hasSelection) {
+      safeShowError('Export Selection', 'No selection found.');
+      return;
+    }
+
+    const safeHtml = stripExecutableBlocks(decodeEntities(html || text));
+    const plain = stripTags(safeHtml)
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    await fs.promises.writeFile(filePath, plain, 'utf8');
+  } catch (err) {
+    console.error('Save Selection as Text failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
 // ---------- Chat pane save helpers ----------
 // A) Hide everything except the chat pane, then savePage (HTMLOnly/MHTML)
 async function saveOnlyPaneWithSavePage(win, filePath, format /* 'HTMLOnly' | 'MHTML' */) {
@@ -3757,19 +3948,196 @@ function getSaveDialogFilters() {
   return filters;
 }
 
+const EXPORT_SCOPES = Object.freeze({
+  PANE: 'pane',
+  SELECTION: 'selection',
+});
+
+const EXPORT_PROFILE_ORDER = Object.freeze([
+  'cleanMarkdown',
+  'rawMarkdown',
+  'markdownWithMetadata',
+  'html',
+  'htmlArchive',
+  'plainText',
+  'pdf',
+]);
+
+const EXPORT_PROFILES = Object.freeze({
+  cleanMarkdown: {
+    label: 'Clean Markdown',
+    defaultExtension: 'md',
+    extensions: ['md', 'markdown'],
+    filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    paneWriter: saveChatPaneAsMarkdown,
+    selectionWriter: saveSelectionAsCleanMarkdown,
+  },
+
+  rawMarkdown: {
+    label: 'Raw Markdown',
+    defaultExtension: 'md',
+    extensions: ['md', 'markdown'],
+    filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    paneWriter: saveChatPaneAsRawMarkdown,
+    selectionWriter: saveSelectionAsRawMarkdown,
+  },
+
+  markdownWithMetadata: {
+    label: 'Markdown with metadata header',
+    defaultExtension: 'md',
+    extensions: ['md', 'markdown'],
+    filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+    paneWriter: saveChatPaneAsMarkdownWithMetadata,
+    selectionWriter: saveSelectionAsMarkdownWithMetadata,
+  },
+
+  html: {
+    label: 'HTML',
+    defaultExtension: 'html',
+    extensions: ['html'],
+    filters: [{ name: 'HTML', extensions: ['html'] }],
+    paneWriter: savePaneAsCleanHTML,
+    selectionWriter: saveSelectionAsHTML,
+  },
+
+  htmlArchive: {
+    label: 'HTML archive',
+    defaultExtension: 'mhtml',
+    extensions: ['mhtml'],
+    filters: [{ name: 'Web Archive (MHTML)', extensions: ['mhtml'] }],
+    paneWriter: async (win, filePath) => {
+      await saveOnlyPaneWithSavePage(win, filePath, 'MHTML');
+    },
+    selectionWriter: null,
+  },
+
+  plainText: {
+    label: 'Plain text',
+    defaultExtension: 'txt',
+    extensions: ['txt'],
+    filters: [{ name: 'Plain Text', extensions: ['txt'] }],
+    paneWriter: saveChatPaneAsText,
+    selectionWriter: saveSelectionAsText,
+  },
+
+  pdf: {
+    label: 'PDF',
+    defaultExtension: 'pdf',
+    extensions: ['pdf'],
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    paneWriter: saveChatPaneAsPDF,
+    selectionWriter: saveSelectionAsPDF,
+  },
+});
+
+function getExportProfile(profileKey, fallbackKey = 'cleanMarkdown') {
+  return EXPORT_PROFILES[profileKey] || EXPORT_PROFILES[fallbackKey] || EXPORT_PROFILES.cleanMarkdown;
+}
+
+function getWriterForExportScope(profile, scope) {
+  if (!profile) return null;
+  return scope === EXPORT_SCOPES.SELECTION ? profile.selectionWriter : profile.paneWriter;
+}
+
+function getExportScopeLabel(scope) {
+  return scope === EXPORT_SCOPES.SELECTION ? 'Selection' : 'Chat Pane';
+}
+
+function getDefaultExportPathForProfile(scope, profile) {
+  const base = scope === EXPORT_SCOPES.SELECTION ? 'copilot-selection' : 'copilot-chat';
+  return `${base}.${profile.defaultExtension}`;
+}
+
+function ensureProfileFileExtension(filePath, profile) {
+  const targetExt = String(profile?.defaultExtension || '').replace(/^\./, '').trim();
+  if (!targetExt) return filePath;
+
+  const allowed = new Set((profile?.extensions || [targetExt]).map(ext => String(ext).replace(/^\./, '').toLowerCase()));
+  const parsed = path.parse(filePath);
+  const currentExt = String(parsed.ext || '').replace(/^\./, '').toLowerCase();
+
+  if (currentExt && allowed.has(currentExt)) return filePath;
+
+  return path.join(parsed.dir, `${parsed.name}.${targetExt}`);
+}
+
+async function saveChatPaneByProfile(win, profileKey, filePath) {
+  const profile = getExportProfile(profileKey, APP_CONFIG.defaultPaneExportProfile);
+  const writer = getWriterForExportScope(profile, EXPORT_SCOPES.PANE);
+  if (typeof writer !== 'function') {
+    safeShowError('Export unavailable', `${profile.label} is not available for chat pane export.`);
+    return filePath;
+  }
+
+  const finalPath = ensureProfileFileExtension(filePath, profile);
+  await writer(win, finalPath);
+  return finalPath;
+}
+
+async function saveSelectionByProfile(win, profileKey, filePath) {
+  const profile = getExportProfile(profileKey, APP_CONFIG.defaultSelectionExportProfile);
+  const writer = getWriterForExportScope(profile, EXPORT_SCOPES.SELECTION);
+  if (typeof writer !== 'function') {
+    safeShowError('Export unavailable', `${profile.label} is not available for selection export.`);
+    return filePath;
+  }
+
+  const finalPath = ensureProfileFileExtension(filePath, profile);
+  await writer(win, finalPath);
+  return finalPath;
+}
+
+async function promptExportWithProfile(win, scope, profileKey) {
+  if (!win) return;
+
+  const fallbackKey = scope === EXPORT_SCOPES.SELECTION
+    ? APP_CONFIG.defaultSelectionExportProfile
+    : APP_CONFIG.defaultPaneExportProfile;
+  const profile = getExportProfile(profileKey, fallbackKey);
+  const writer = getWriterForExportScope(profile, scope);
+
+  if (typeof writer !== 'function') {
+    safeShowError('Export unavailable', `${profile.label} is not available for ${getExportScopeLabel(scope).toLowerCase()} export.`);
+    return;
+  }
+
+  try {
+    const { filePath, canceled } = await dialog.showSaveDialog(win, {
+      title: `Export ${getExportScopeLabel(scope)} - ${profile.label}`,
+      defaultPath: getDefaultExportPathForProfile(scope, profile),
+      filters: profile.filters,
+    });
+
+    if (canceled || !filePath) return;
+
+    const finalPath = scope === EXPORT_SCOPES.SELECTION
+      ? await saveSelectionByProfile(win, profileKey, filePath)
+      : await saveChatPaneByProfile(win, profileKey, filePath);
+
+    win.__lastSavePath = finalPath;
+  } catch (err) {
+    console.error(`${profile.label} ${scope} export failed:`, err);
+    safeShowError('Export failed', String(err?.message ?? err));
+  }
+}
+
+function buildExportProfileMenuTemplate(win, scope) {
+  return EXPORT_PROFILE_ORDER
+    .map(profileKey => ({ profileKey, profile: EXPORT_PROFILES[profileKey] }))
+    .filter(({ profile }) => typeof getWriterForExportScope(profile, scope) === 'function')
+    .map(({ profileKey, profile }) => ({
+      label: `${profile.label}...`,
+      click: async () => {
+        await promptExportWithProfile(win, scope, profileKey);
+      }
+    }));
+}
+
 // --- Shared helper: prompt to Save Chat Pane (HTML or MHTML) ---
 async function promptSaveChatPane(win) {
   if (!win) return;
   try {
-    const { filePath, canceled } = await dialog.showSaveDialog(win, {
-      title: 'Save Chat Pane As',
-      defaultPath: `copilot-chat.${getDefaultExportExtension()}`,
-        filters: getSaveDialogFilters(),
-    });
-    if (canceled || !filePath) return;
-    await saveChatPaneByExtension(win, filePath);
-    // Optionally remember for plain "Save"
-    win.__lastSavePath = filePath;
+    await promptExportWithProfile(win, EXPORT_SCOPES.PANE, APP_CONFIG.defaultPaneExportProfile);
   } catch (err) {
     console.error('Save Chat Pane failed:', err);
     try { dialog.showErrorBox('Save failed', String(err?.message || err)); } catch {}
@@ -3800,6 +4168,52 @@ async function saveChatPaneAsMarkdown(win, filePath) {
     await fs.promises.writeFile(filePath, md, 'utf8');
   } catch (err) {
     console.error('Save Chat Pane as Markdown failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
+async function saveChatPaneAsRawMarkdown(win, filePath) {
+  if (!win) return;
+  try {
+    const snapshot = await getChatPaneSnapshot(win);
+    if (!snapshot?.ok) {
+      safeShowError('Save Chat Pane as Raw Markdown', 'Chat pane not found.');
+      return;
+    }
+
+    const paneHtml = String(snapshot.html ?? '');
+    const withLineBreaks = paneHtml.replace(/></g, '>\n<');
+    const safeHtml = stripExecutableBlocks(withLineBreaks);
+    const md = htmlToMarkdown(safeHtml);
+    await fs.promises.writeFile(filePath, md, 'utf8');
+  } catch (err) {
+    console.error('Save Chat Pane as Raw Markdown failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
+async function saveChatPaneAsMarkdownWithMetadata(win, filePath) {
+  if (!win) return;
+  try {
+    const snapshot = await getBestChatRootCleaned(win);
+    if (!snapshot?.ok) {
+      safeShowError('Save Chat Pane as Markdown with metadata', 'Chat pane not found.');
+      return;
+    }
+
+    const paneHtml = String(snapshot.html ?? '');
+    const withLineBreaks = paneHtml.replace(/></g, '>\n<');
+    const safeHtml = stripExecutableBlocks(withLineBreaks);
+    const md = htmlToMarkdown(safeHtml);
+    const header = buildExportMetadataHeader(win, {
+      scope: EXPORT_SCOPES.PANE,
+      profileKey: 'markdownWithMetadata',
+      format: 'markdown'
+    });
+
+    await fs.promises.writeFile(filePath, `${header}\n${md}\n`, 'utf8');
+  } catch (err) {
+    console.error('Save Chat Pane as Markdown with metadata failed:', err);
     safeShowError('Save failed', String(err?.message ?? err));
   }
 }
@@ -3975,6 +4389,66 @@ function buildPrintableChatPaneHtml({ title = 'Copilot Chat', html = '' } = {}) 
   </html>`;
 }
 
+async function writeHtmlDocumentToPDF(filePath, htmlDoc) {
+  let printWindow = null;
+  let tempHtmlPath = null;
+
+  try {
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    tempHtmlPath = path.join(app.getPath('temp'), `copilot-export-print-${stamp}.html`);
+    await fs.promises.writeFile(tempHtmlPath, htmlDoc, 'utf8');
+
+    printWindow = new BrowserWindow({
+      show: false,
+      width: 1200,
+      height: 1600,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        backgroundThrottling: false
+      }
+    });
+
+    await printWindow.loadFile(tempHtmlPath);
+    const pdf = await printWindow.webContents.printToPDF({
+      printBackground: true,
+      marginsType: 1,
+      pageSize: 'Letter',
+      landscape: false,
+      preferCSSPageSize: true
+    });
+
+    await fs.promises.writeFile(filePath, pdf);
+  } finally {
+    if (printWindow && !printWindow.isDestroyed()) {
+      try { printWindow.destroy(); } catch {}
+    }
+    if (tempHtmlPath) {
+      try { await fs.promises.unlink(tempHtmlPath); } catch {}
+    }
+  }
+}
+
+async function saveSelectionAsPDF(win, filePath) {
+  if (!win) return;
+  try {
+    const { hasSelection, html, text } = await getSelectionFragment(win);
+    if (!hasSelection) {
+      safeShowError('Export Selection as PDF', 'No selection found.');
+      return;
+    }
+
+    const title = win.webContents.getTitle?.() || 'Copilot Selection';
+    const body = html || `<pre>${escapeHtmlForExport(text)}</pre>`;
+    const htmlDoc = buildPrintableChatPaneHtml({ title, html: body });
+    await writeHtmlDocumentToPDF(filePath, htmlDoc);
+  } catch (err) {
+    console.error('Save Selection as PDF failed:', err);
+    safeShowError('Save failed', String(err?.message ?? err));
+  }
+}
+
 async function saveChatPaneAsPDF(win, filePath) {
   if (!win) return;
   let printWindow = null;
@@ -3992,34 +4466,7 @@ async function saveChatPaneAsPDF(win, filePath) {
       title,
       html: String(snapshot.html ?? '')
     });
-
-    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    tempHtmlPath = path.join(app.getPath('temp'), `copilot-chat-pane-print-${stamp}.html`);
-    await fs.promises.writeFile(tempHtmlPath, htmlDoc, 'utf8');
-
-    printWindow = new BrowserWindow({
-      show: false,
-      width: 1200,
-      height: 1600,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        backgroundThrottling: false
-      }
-    });
-
-    await printWindow.loadFile(tempHtmlPath);
-
-    const pdf = await printWindow.webContents.printToPDF({
-      printBackground: true,
-      marginsType: 1,
-      pageSize: 'Letter',
-      landscape: false,
-      preferCSSPageSize: true
-    });
-
-    await fs.promises.writeFile(filePath, pdf);
+    await writeHtmlDocumentToPDF(filePath, htmlDoc);
   } catch (err) {
     console.error('Save Chat Pane as PDF failed:', err);
     safeShowError('Save failed', String(err?.message ?? err));
@@ -4030,6 +4477,7 @@ async function saveChatPaneAsPDF(win, filePath) {
     if (tempHtmlPath) {
       try { await fs.promises.unlink(tempHtmlPath); } catch {}
     }
+    tempHtmlPath = null;
   }
 }
 
@@ -4049,6 +4497,15 @@ function appendFileItems(fileSubmenu, win) {
         }
       }
     }),
+    new MenuItem({
+      label: 'Export Chat Pane',
+      submenu: Menu.buildFromTemplate(buildExportProfileMenuTemplate(win, EXPORT_SCOPES.PANE))
+    }),
+    new MenuItem({
+      label: 'Export Selection',
+      submenu: Menu.buildFromTemplate(buildExportProfileMenuTemplate(win, EXPORT_SCOPES.SELECTION))
+    }),
+    new MenuItem({ type: 'separator' }),
     new MenuItem({
       label: 'Save Selection as Markdown',
       accelerator: 'Ctrl+Shift+M',

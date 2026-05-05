@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.15.13",
+  "version": "1.15.14",
   "description": "Copilot for Linux",
   "main": "main.js",
   "scripts": {
