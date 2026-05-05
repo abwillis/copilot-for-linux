@@ -2,6 +2,7 @@
 const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const util = require('util');
 const TurndownService = require('turndown');
 const turndownPluginGfm = require('turndown-plugin-gfm');
 
@@ -18,7 +19,9 @@ const DEFAULT_APP_CONFIG = Object.freeze({
     quickPasteDelayMs: 3000,
     findContentVisibilityOverride: true,
     devToolsEnabled: true,
-    enableConsoleLogging: true
+    enableConsoleLogging: true,
+    enableFileLogging: true,
+    logFileName: 'copilot-for-linux.log'
 });
 
 let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
@@ -31,19 +34,70 @@ const ORIGINAL_CONSOLE = Object.freeze({
                                        warn: console.warn.bind(console),
                                        error: console.error.bind(console),
 });
-const noopConsole = () => {};
 let consoleLoggingEnabled = true;
+let fileLoggingEnabled = false;
+let activeLogFilePath = null;
+let isWritingLogFile = false;
 
-function applyConsoleLoggingConfig(enabled) {
-  const nextEnabled = normalizeBooleanConfig(enabled, DEFAULT_APP_CONFIG.enableConsoleLogging);
-  if (consoleLoggingEnabled === nextEnabled) return;
-  consoleLoggingEnabled = nextEnabled;
+function sanitizeLogFileName(name) {
+  const raw = String(name || DEFAULT_APP_CONFIG.logFileName).trim() || DEFAULT_APP_CONFIG.logFileName;
+  const cleaned = raw
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || DEFAULT_APP_CONFIG.logFileName;
+}
 
-  console.log = nextEnabled ? ORIGINAL_CONSOLE.log : noopConsole;
-  console.info = nextEnabled ? ORIGINAL_CONSOLE.info : noopConsole;
-  console.debug = nextEnabled ? ORIGINAL_CONSOLE.debug : noopConsole;
-  console.warn = nextEnabled ? ORIGINAL_CONSOLE.warn : noopConsole;
-  console.error = nextEnabled ? ORIGINAL_CONSOLE.error : noopConsole;
+function getLogFilePath() {
+  return path.join(getLogsFolderPath(), sanitizeLogFileName(APP_CONFIG.logFileName));
+}
+
+function formatConsoleArg(value) {
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return value.stack || value.message || String(value);
+  return util.inspect(value, {
+    depth: 6,
+    colors: false,
+    breakLength: 140,
+    maxArrayLength: 100,
+    maxStringLength: 10000
+  });
+}
+
+function appendConsoleLogToFile(level, args) {
+  if (!fileLoggingEnabled || isWritingLogFile) return;
+  isWritingLogFile = true;
+  try {
+    const filePath = activeLogFilePath || getLogFilePath();
+    const line = `[${new Date().toISOString()}] [${String(level).toUpperCase()}] ${args.map(formatConsoleArg).join(' ')}\n`;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(filePath, line, 'utf8');
+  } catch (err) {
+    try { ORIGINAL_CONSOLE.error('File logging failed:', err); } catch {}
+  } finally {
+    isWritingLogFile = false;
+  }
+}
+
+function makeConsoleMethod(level) {
+  return (...args) => {
+    if (consoleLoggingEnabled) {
+      try { ORIGINAL_CONSOLE[level](...args); } catch {}
+    }
+    appendConsoleLogToFile(level, args);
+  };
+}
+
+function applyConsoleLoggingConfig() {
+  consoleLoggingEnabled = normalizeBooleanConfig(APP_CONFIG.enableConsoleLogging, DEFAULT_APP_CONFIG.enableConsoleLogging);
+  fileLoggingEnabled = normalizeBooleanConfig(APP_CONFIG.enableFileLogging, DEFAULT_APP_CONFIG.enableFileLogging);
+  activeLogFilePath = fileLoggingEnabled ? getLogFilePath() : null;
+
+  console.log = makeConsoleMethod('log');
+  console.info = makeConsoleMethod('info');
+  console.debug = makeConsoleMethod('debug');
+  console.warn = makeConsoleMethod('warn');
+  console.error = makeConsoleMethod('error');
 }
 
 function getConfigFilePath() {
@@ -85,6 +139,8 @@ function normalizeAppConfig(raw = {}) {
   merged.findContentVisibilityOverride = normalizeBooleanConfig(merged.findContentVisibilityOverride, DEFAULT_APP_CONFIG.findContentVisibilityOverride);
   merged.devToolsEnabled = normalizeBooleanConfig(merged.devToolsEnabled, DEFAULT_APP_CONFIG.devToolsEnabled);
   merged.enableConsoleLogging = normalizeBooleanConfig(merged.enableConsoleLogging, DEFAULT_APP_CONFIG.enableConsoleLogging);
+  merged.enableFileLogging = normalizeBooleanConfig(merged.enableFileLogging, DEFAULT_APP_CONFIG.enableFileLogging);
+  merged.logFileName = sanitizeLogFileName(merged.logFileName || DEFAULT_APP_CONFIG.logFileName);
 
   if (!merged.copilotUrl) merged.copilotUrl = DEFAULT_APP_CONFIG.copilotUrl;
   if (!merged.partition) merged.partition = DEFAULT_APP_CONFIG.partition;
@@ -113,7 +169,7 @@ function loadAppConfig() {
   COPILOT_PARTITION = APP_CONFIG.partition;
   COPILOT_URL = APP_CONFIG.copilotUrl;
   QUICK_PASTE_DELAY_MS = APP_CONFIG.quickPasteDelayMs;
-  applyConsoleLoggingConfig(APP_CONFIG.enableConsoleLogging);
+  applyConsoleLoggingConfig();
 
   try {
     // Keep the file self-documenting and add any newly introduced defaults.
