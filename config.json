@@ -7,5 +7,6 @@
   "defaultExportFormat": "md",
   "quickPasteDelayMs": 3000,
   "findContentVisibilityOverride": true,
-  "devToolsEnabled": true
+  "devToolsEnabled": true,
+  "enableConsoleLogging": false
 }
