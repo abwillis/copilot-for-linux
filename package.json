@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.16.03",
+  "version": "1.16.04",
   "description": "Copilot for Linux",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,12 @@
       "output": "dist"
     },
     "files": [
-      "**/*"
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "package.json",
+      "assets/**",
+      "lib/**"
     ],
     "asarUnpack": [
       "**/*.node",
