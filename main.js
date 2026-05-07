@@ -6,6 +6,7 @@ const util = require('util');
 const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createFindInPage } = require('./lib/find-in-page');
+const { createDirectOpen } = require('./lib/direct-open');
 
 // === Extracted DOM + layout helpers (Tier 3 refactor) ===
 const {
@@ -247,208 +248,6 @@ const SEND_MODE = Object.freeze({
   QUOTE: 'quote',
 });
 
-// ============================================================================
-// Shift+click direct-open download support
-// ============================================================================
-const DIRECT_OPEN_REQUEST_TTL_MS = 15000;
-const directOpenRequests = new Map(); // senderWC.id -> { url, expiresAt }
-const tempOpenedFiles = new Set();    // best-effort cleanup on quit
-
-function debugDirectOpen(...args) {
-  try {
-    console.log('[direct-open]', ...args);
-  } catch {}
-}
-
-function normalizeComparableUrl(input) {
-  try {
-    const u = new URL(String(input || '').trim());
-    u.hash = '';
-    return u.toString();
-  } catch {
-    return String(input || '').trim();
-  }
-}
-
-function sanitizeDownloadFilename(name) {
-  const raw = String(name || '').trim() || 'download';
-  const cleaned = raw
-  .replace(/[\\/:*?"<>|]/g, '_')
-  .replace(/\s+/g, ' ')
-  .trim();
-  return cleaned || 'download';
-}
-
-function buildDirectOpenTempPath(filename) {
-  const safeName = sanitizeDownloadFilename(filename);
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return path.join(app.getPath('temp'), `copilot-open-${stamp}-${safeName}`);
-}
-
-function pruneExpiredDirectOpenRequests() {
-  const now = Date.now();
-  for (const [key, value] of directOpenRequests.entries()) {
-    if (!value || value.expiresAt <= now) {
-      directOpenRequests.delete(key);
-    }
-  }
-}
-
-function itemUrlMatchesDirectOpenRequest(item, request) {
-  if (!request?.url) return false;
-
-  const requested = normalizeComparableUrl(request.url);
-  const candidates = new Set();
-
-  try {
-    const current = item?.getURL?.();
-    if (current) candidates.add(normalizeComparableUrl(current));
-  } catch {}
-
-  try {
-    const chain = item?.getURLChain?.();
-    if (Array.isArray(chain)) {
-      for (const u of chain) {
-        if (u) candidates.add(normalizeComparableUrl(u));
-      }
-    }
-  } catch {}
-
-  if (candidates.has(requested)) return true;
-
-  // Redirects sometimes preserve the requested URL as a prefix/query ancestor.
-  for (const u of candidates) {
-    if (u === requested) return true;
-    if (u.startsWith(requested) || requested.startsWith(u)) return true;
-  }
-
-  return false;
-}
-
-function registerDirectOpenDownloadHandler() {
-  if (!APP_CONFIG.enableDirectOpen) return;
-  const ses = session.fromPartition(COPILOT_PARTITION);
-  if (!ses || ses.__copilotDirectOpenDownloadHandlerAttached) return;
-  ses.__copilotDirectOpenDownloadHandlerAttached = true;
-
-  // Prevent Chromium from prompting with the normal save dialog for a tagged
-  // Shift+click download. We decide the path in will-download.
-  ses.on('download-created', (_event, item, webContents) => {
-    try {
-      pruneExpiredDirectOpenRequests();
-      const senderId = webContents?.id;
-      if (!senderId) return;
-      const request = directOpenRequests.get(senderId);
-      if (!request) return;
-      debugDirectOpen('download-created', {
-        senderId,
-        requestUrl: request.url,
-        itemUrl: item?.getURL?.(),
-                      itemUrlChain: (typeof item?.getURLChain === 'function') ? item.getURLChain() : [],
-                      itemFilename: (typeof item?.getFilename === 'function') ? item.getFilename() : null,
-      });
-      if (request.expiresAt <= Date.now()) {
-        directOpenRequests.delete(senderId);
-        return;
-      }
-      if (itemUrlMatchesDirectOpenRequest(item, request) && typeof item.setSaveDialogOptions === 'function') {
-        item.setSaveDialogOptions({ defaultPath: '' });
-      }
-    } catch {}
-  });
-
-  ses.on('will-download', (event, item, webContents) => {
-    try {
-      pruneExpiredDirectOpenRequests();
-
-      const senderId = webContents?.id;
-      if (!senderId) return;
-
-      const request = directOpenRequests.get(senderId);
-      if (!request) return;
-      const matches = itemUrlMatchesDirectOpenRequest(item, request);
-      debugDirectOpen('will-download', {
-        senderId,
-        requestUrl: request.url,
-        itemUrl: item?.getURL?.(),
-                      itemUrlChain: (typeof item?.getURLChain === 'function') ? item.getURLChain() : [],
-                      itemFilename: (typeof item?.getFilename === 'function') ? item.getFilename() : null,
-                      matches,
-      });
-      if (request.expiresAt <= Date.now()) {
-        directOpenRequests.delete(senderId);
-        return;
-      }
-
-      directOpenRequests.delete(senderId);
-
-      const filename =
-      sanitizeDownloadFilename(
-        item?.getFilename?.() ||
-        (() => {
-          try {
-            const u = new URL(String(request.url || ''));
-            return path.basename(u.pathname || '') || 'download';
-          } catch {
-            return 'download';
-          }
-        })()
-      );
-
-      const tempPath = buildDirectOpenTempPath(filename);
-      tempOpenedFiles.add(tempPath);
-
-      debugDirectOpen('about to setSavePath', {
-        tempPath,
-        itemUrl: item?.getURL?.(),
-                      itemFilename: (typeof item?.getFilename === 'function') ? item.getFilename() : null,
-                      totalBytes: (typeof item?.getTotalBytes === 'function') ? item.getTotalBytes() : null,
-      });
-
-      item.on('updated', (_evt, state) => {
-        debugDirectOpen('download updated', {
-          state,
-          receivedBytes: (typeof item?.getReceivedBytes === 'function') ? item.getReceivedBytes() : null,
-                        totalBytes: (typeof item?.getTotalBytes === 'function') ? item.getTotalBytes() : null,
-                        isPaused: (typeof item?.isPaused === 'function') ? item.isPaused() : null,
-        });
-      });
-
-      debugDirectOpen('setSavePath', tempPath);
-      try {
-        item.setSavePath(tempPath);
-      } catch (err) {
-        console.error('Direct-open setSavePath failed:', err);
-        tempOpenedFiles.delete(tempPath);
-        return;
-      }
-
-      item.once('done', async (_evt, state) => {
-        debugDirectOpen('download done', { state, tempPath });
-        if (state !== 'completed') {
-          try { await fs.promises.unlink(tempPath); } catch {}
-          tempOpenedFiles.delete(tempPath);
-          return;
-        }
-
-        try {
-          const openError = await shell.openPath(tempPath);
-          if (openError) {
-            safeShowError('Open downloaded file failed', String(openError));
-          }
-        } catch (err) {
-          console.error('Direct-open shell.openPath failed:', err);
-          safeShowError('Open downloaded file failed', String(err?.message || err));
-        }
-      });
-    } catch (err) {
-      directOpenRequests.delete(webContents?.id);
-      console.error('Direct-open will-download handler failed:', err);
-    }
-  });
-}
-
-
 // Unified reveal helper to avoid repeated show/focus chains
 function reveal(win) {
   if (!win) return;
@@ -540,6 +339,22 @@ function sendFindModalResults(...args) { return initFindInPage().sendFindModalRe
 function getWCFromEventSender(...args) { return initFindInPage().getWCFromEventSender(...args); }
 function getWC(...args) { return initFindInPage().getWC(...args); }
 function applyWordStartOptions(...args) { return initFindInPage().applyWordStartOptions(...args); }
+
+// ---------- Direct-open module bridge ----------
+let directOpenInstance = null;
+function initDirectOpen() {
+  if (directOpenInstance) return directOpenInstance;
+  directOpenInstance = createDirectOpen({
+    session, shell, fs, path, app, ipcMain,
+    getAppConfig,
+    getCopilotPartition: () => COPILOT_PARTITION,
+    safeShowError,
+  });
+  return directOpenInstance;
+}
+function registerDirectOpenDownloadHandler() { return initDirectOpen().registerDirectOpenDownloadHandler(); }
+function pruneExpiredDirectOpenRequests() { return initDirectOpen().pruneExpiredDirectOpenRequests(); }
+function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
 
 
 
@@ -1508,37 +1323,7 @@ async function saveAsDialog(...args) { return initExporters().saveAsDialog(...ar
 // ============================================================================
 
 
-ipcMain.on(IPC.DIRECT_OPEN_LINK, (event, payload) => {
-  if (!APP_CONFIG.enableDirectOpen) return;
-  try {
-    pruneExpiredDirectOpenRequests();
-
-    const href = String(payload?.href || '').trim();
-    if (!href) return;
-
-    directOpenRequests.set(event.sender.id, {
-      url: href,
-      expiresAt: Date.now() + DIRECT_OPEN_REQUEST_TTL_MS,
-    });
-    debugDirectOpen('ipc request queued', {
-      senderId: event.sender.id,
-      href,
-    });
-  } catch (err) {
-    console.error('IPC direct-open-link failed:', err);
-  }
-});
-
-ipcMain.on(IPC.PRELOAD_PING, (event, payload) => {
-  debugDirectOpen('preload ping', {
-    senderId: event.sender.id,
-    href: payload?.href,
-    ts: payload?.ts,
-  });
-});
-
-
-
+  initDirectOpen().registerDirectOpenIpcHandler(IPC);
 
 // ---------- File menu (Save / Save As) ----------
 function appendFileItems(fileSubmenu, win) {
@@ -1817,7 +1602,7 @@ function createTray() {
   });
 }
 
-app.whenReady().then(() => {
+app.on('ready', () => {
   loadAppConfig();
   if (APP_CONFIG.enableDirectOpen) registerDirectOpenDownloadHandler();
   createWindow();
@@ -1856,12 +1641,7 @@ app.on('before-quit', () => {
 
     // Best-effort: close quick windows on quit
     try { closeAllQuickChatWindows(); } catch {}
-    try {
-      for (const p of tempOpenedFiles) {
-        try { fs.unlinkSync(p); } catch {}
-      }
-      tempOpenedFiles.clear();
-    } catch {}
+    try { initDirectOpen().cleanupTempFiles(); } catch {}
   } catch {}
 });
 
