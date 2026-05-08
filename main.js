@@ -8,6 +8,7 @@ const { createQuickChatManager } = require('./lib/quick-chat');
 const { createFindInPage } = require('./lib/find-in-page');
 const { createDirectOpen } = require('./lib/direct-open');
 const { createWindowState } = require('./lib/window-state');
+const { createSessionHelpers } = require('./lib/session-helpers');
 
 // === Extracted DOM + layout helpers (Tier 3 refactor) ===
 const {
@@ -370,6 +371,35 @@ function scheduleSaveWindowState(...args) { return initWindowState().scheduleSav
 function loadWindowState(...args) { return initWindowState().loadWindowState(...args); }
 function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyDisplay(...args); }
 
+// ---------- Session-helpers module bridge ----------
+let sessionHelpersInstance = null;
+function initSessionHelpers() {
+  if (sessionHelpersInstance) return sessionHelpersInstance;
+  sessionHelpersInstance = createSessionHelpers({
+    app, BrowserWindow, dialog, shell, session, clipboard, nativeImage, fs, path,
+    getAppConfig, getCopilotPartition: () => COPILOT_PARTITION, getCopilotUrl: () => COPILOT_URL,
+    getConfigFilePath, getLogFilePath,
+    getMainWindow: () => mainWindow, safeShowError,
+  });
+  return sessionHelpersInstance;
+}
+function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
+function getCopilotSession() { return initSessionHelpers().getCopilotSession(); }
+function getActiveCopilotWindow() { return initSessionHelpers().getActiveCopilotWindow(); }
+function getActiveCopilotWebContents() { return initSessionHelpers().getActiveCopilotWebContents(); }
+function reloadCopilot(...a) { return initSessionHelpers().reloadCopilot(...a); }
+function clearCopilotCache() { return initSessionHelpers().clearCopilotCache(); }
+function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndSignOut(); }
+function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
+function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
+function getLogsFolderPath() { return initSessionHelpers().getLogsFolderPath(); }
+function openPathWithError(...a) { return initSessionHelpers().openPathWithError(...a); }
+function openLogsFolder() { return initSessionHelpers().openLogsFolder(); }
+function openConfigFile() { return initSessionHelpers().openConfigFile(); }
+function toggleActiveWindowAlwaysOnTop() { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(); }
+function showAboutDialog() { return initSessionHelpers().showAboutDialog(); }
+function showApplicationHelp() { return initSessionHelpers().showApplicationHelp(); }
+
 
 
 // ============================================================================
@@ -580,271 +610,6 @@ function ensureDidStopLoadingHandler(webContents) {
 
 
 
-
-// === Helper: runtime info for About dialog ===
-function getRuntimeInfo() {
-  const name = app.getName?.() || 'Application';
-  const appVersion = app.getVersion?.() || '0.0.0';
-  const nodeVersion = process.versions?.node || 'unknown';
-  const electronVersion = process.versions?.electron || 'unknown';
-  const chromeVersion = process.versions?.chrome || 'unknown';
-  const v8Version = process.versions?.v8 || 'unknown';
-
-  return {
-    name,
-    appVersion,
-    nodeVersion,
-    electronVersion,
-    chromeVersion,
-    v8Version,
-    detail:
-    `Version: ${appVersion}\n` +
-    `Node: ${nodeVersion}\n` +
-    `V8: ${v8Version}\n` +
-    `Electron: ${electronVersion}\n` +
-    `Chromium: ${chromeVersion}\n`
-  };
-}
-
-
-// ============================================================================
-// Session / cache / troubleshooting menu helpers
-// ============================================================================
-function getCopilotSession() {
-  return session.fromPartition(COPILOT_PARTITION);
-}
-
-function getActiveCopilotWindow() {
-  const focused = BrowserWindow.getFocusedWindow();
-  const parent = focused?.getParentWindow?.();
-  return parent || focused || mainWindow;
-}
-
-function getActiveCopilotWebContents() {
-  const win = getActiveCopilotWindow();
-  if (!win || win.isDestroyed?.()) return null;
-  return win.webContents || null;
-}
-
-function reloadCopilot({ ignoreCache = false } = {}) {
-  try {
-    const wc = getActiveCopilotWebContents();
-    if (!wc) return;
-    if (ignoreCache) wc.reloadIgnoringCache();
-    else wc.reload();
-  } catch (err) {
-    console.error('Reload Copilot failed:', err);
-    safeShowError('Reload Copilot failed', String(err?.message ?? err));
-  }
-}
-
-async function clearCopilotCache() {
-  try {
-    const ses = getCopilotSession();
-    await ses.clearCache();
-  } catch (err) {
-    console.error('Clear Copilot Cache failed:', err);
-    safeShowError('Clear Copilot Cache failed', String(err?.message ?? err));
-  }
-}
-
-async function clearCookiesAndSignOut() {
-  try {
-    const ses = getCopilotSession();
-    await ses.clearStorageData({
-      storages: [
-        'cookies',
-        'localstorage',
-        'sessionstorage',
-        'indexeddb',
-        'serviceworkers',
-        'cachestorage'
-      ]
-    });
-    reloadCopilot({ ignoreCache: true });
-  } catch (err) {
-    console.error('Clear Cookies / Sign Out failed:', err);
-    safeShowError('Clear Cookies / Sign Out failed', String(err?.message ?? err));
-  }
-}
-
-function copyCurrentUrl() {
-  try {
-    const wc = getActiveCopilotWebContents();
-    if (!wc) return;
-    clipboard.writeText(wc.getURL());
-  } catch (err) {
-    console.error('Copy Current URL failed:', err);
-    safeShowError('Copy Current URL failed', String(err?.message ?? err));
-  }
-}
-
-async function openCurrentUrlExternal() {
-  try {
-    const wc = getActiveCopilotWebContents();
-    if (!wc) return;
-    const url = wc.getURL();
-    if (url) await shell.openExternal(url);
-  } catch (err) {
-    console.error('Open Current URL in External Browser failed:', err);
-    safeShowError('Open Current URL failed', String(err?.message ?? err));
-  }
-}
-
-// ============================================================================
-// Tray maintenance helpers
-// ============================================================================
-function getLogsFolderPath() {
-  try {
-    const logsPath = app.getPath('logs');
-    fs.mkdirSync(logsPath, { recursive: true });
-    return logsPath;
-  } catch {
-    const fallback = path.join(app.getPath('userData'), 'logs');
-    fs.mkdirSync(fallback, { recursive: true });
-    return fallback;
-  }
-}
-
-
-async function openPathWithError(title, targetPath) {
-  try {
-    const openError = await shell.openPath(targetPath);
-    if (openError) safeShowError(title, String(openError));
-  } catch (err) {
-    console.error(`${title} failed:`, err);
-    safeShowError(title, String(err?.message ?? err));
-  }
-}
-
-async function openLogsFolder() {
-  await openPathWithError('Open Logs Folder failed', getLogsFolderPath());
-}
-
-async function openConfigFile() {
-  const configPath = await ensureConfigFile();
-  await openPathWithError('Open Config File failed', configPath);
-}
-
-function toggleActiveWindowAlwaysOnTop() {
-  try {
-    const win = getActiveCopilotWindow();
-    if (!win || win.isDestroyed?.()) return;
-    win.setAlwaysOnTop(!win.isAlwaysOnTop());
-    refreshQuickChatMenu();
-    refreshTrayMenu();
-  } catch (err) {
-    console.error('Toggle Always on Top failed:', err);
-    safeShowError('Toggle Always on Top failed', String(err?.message ?? err));
-  }
-}
-
-function showAboutDialog() {
-  try {
-    const info = getRuntimeInfo();
-    dialog.showMessageBox({
-      type: 'info',
-      buttons: ['OK'],
-      defaultId: 0,
-        title: `About ${info.name}`,
-        message: `${info.name}`,
-        detail: info.detail,
-        noLink: true,
-        icon: appIconImage
-    }).catch(err => {
-      console.error('About dialog failed:', err);
-    });
-  } catch (err) {
-    console.error('About dialog failed:', err);
-  }
-}
-
-function showApplicationHelp() {
-  let helpWin;
-
-  try {
-    const helpPath = path.join(app.getAppPath(), 'assets', 'help.md');
-    const markdown = fs.readFileSync(helpPath, 'utf8');
-
-    // Reuse your Turndown / Markdown-friendly styling philosophy:
-    const html = `<!DOCTYPE html>
-    <html>
-    <head>
-    <meta charset="UTF-8" />
-    <title>Copilot for Linux — Help</title>
-    <style>
-    body {
-      font-family: system-ui, Segoe UI, Arial, sans-serif;
-      margin: 18px;
-      line-height: 1.5;
-      color: #222;
-      background: #fff;
-    }
-    h1, h2, h3 { margin-top: 1.2em; }
-    table {
-      border-collapse: collapse;
-      margin: 0.8em 0;
-      width: 100%;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 6px 8px;
-      vertical-align: top;
-    }
-    code, pre {
-      font-family: Consolas, Menlo, monospace;
-      background: #f5f7fa;
-    }
-    pre {
-      padding: 10px;
-      overflow: auto;
-      border-radius: 6px;
-    }
-    </style>
-    </head>
-    <body>
-    <pre id="md" style="white-space: pre-wrap;"></pre>
-
-    <script>
-    // Render markdown as-is (readable, fast, no dependency),
-    // OR swap this for marked.js later if you want full HTML rendering.
-    document.getElementById('md').textContent = ${JSON.stringify(markdown)};
-    </script>
-    </body>
-    </html>`;
-
-    helpWin = new BrowserWindow({
-      width: 900,
-      height: 700,
-      title: 'Copilot for Linux — Help',
-      resizable: true,
-      minimizable: true,
-      maximizable: true,
-      show: false,
-      autoHideMenuBar: true,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true
-      }
-    });
-
-    helpWin.loadURL(
-      'data:text/html;charset=UTF-8,' + encodeURIComponent(html)
-    );
-
-    helpWin.once('ready-to-show', () => {
-      helpWin.show();
-      helpWin.focus();
-    });
-
-  } catch (err) {
-    console.error('Failed to open Help window:', err);
-    dialog.showErrorBox(
-      'Help Error',
-      String(err?.message ?? err)
-    );
-  }
-}
 
 function buildTrayMenuTemplate() {
   const activeWindow = getActiveCopilotWindow();
