@@ -377,12 +377,25 @@ function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyD
 let sessionHelpersInstance = null;
 function initSessionHelpers() {
   if (sessionHelpersInstance) return sessionHelpersInstance;
+
   sessionHelpersInstance = createSessionHelpers({
-    app, BrowserWindow, dialog, shell, session, clipboard, nativeImage, fs, path,
-    getAppConfig, getCopilotPartition: () => COPILOT_PARTITION, getCopilotUrl: () => COPILOT_URL,
-    getConfigFilePath, getLogFilePath,
-    getMainWindow: () => mainWindow, safeShowError,
+    app, BrowserWindow, dialog, shell,
+    session, clipboard, nativeImage,
+    fs, path,
+
+    getAppConfig,
+    getCopilotPartition: () => COPILOT_PARTITION,
+    getCopilotUrl: () => COPILOT_URL,
+    getConfigFilePath,
+    getLogFilePath,
+    getMainWindow: () => mainWindow,
+    safeShowError,
+
+    ensureConfigFile,
+    refreshQuickChatMenu, refreshTrayMenu,
+    getAppIconImage: () => appIconImage,
   });
+
   return sessionHelpersInstance;
 }
 function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
@@ -421,6 +434,7 @@ function buildContextMenuTemplate(...a) { return initContextMenu().buildContextM
 
 // ---------- App-menu module bridge ----------
 let appMenuInstance = null;
+
 function initAppMenu() {
   if (appMenuInstance) return appMenuInstance;
   appMenuInstance = createAppMenu({
@@ -431,13 +445,15 @@ function initAppMenu() {
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage,
     buildExportProfileMenuTemplate, promptExportWithProfile,
-    selectChatPane, promptSaveChatPane, EXPORT_SCOPES,
+    selectChatPane, promptSaveChatPane, saveSelectionAsMarkdown, EXPORT_SCOPES,
     buildQuickChatManagerMenuTemplate, installQuickChatMenu, refreshQuickChatMenu,
     createQuickChatWindow, buildSendToQuickSubmenu, SEND_MODE,
     ensureSaveState,
   });
+
   return appMenuInstance;
 }
+
 function appendEditItems(...a) { return initAppMenu().appendEditItems(...a); }
 function appendHelpItems(...a) { return initAppMenu().appendHelpItems(...a); }
 function appendSessionItems(...a) { return initAppMenu().appendSessionItems(...a); }
@@ -986,16 +1002,24 @@ function createTray() {
 
 app.on('ready', () => {
   loadAppConfig();
-  if (APP_CONFIG.enableDirectOpen) registerDirectOpenDownloadHandler();
+
+  if (APP_CONFIG.enableDirectOpen) {
+    initDirectOpen().registerDirectOpenIpcHandler(IPC);
+    registerDirectOpenDownloadHandler();
+  }
+
   createWindow();
   createTray();
-  //  createAppMenu();
+
+  // createAppMenu();
 
   // macOS re-activation guard (harmless on Linux)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    else if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
-
+    else if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
   });
 });
 
