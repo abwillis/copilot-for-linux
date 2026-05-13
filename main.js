@@ -261,6 +261,10 @@ function reveal(win) {
   try { win.moveTop(); } catch {}
 }
 
+// --- App identity constants (used by all library modules) -------------------
+const APP_LABEL = 'Copilot';
+const APP_SLUG  = 'copilot';
+
 // ---------- Quick Chat module bridge ----------
 let quickChatManager = null;
 function initQuickChat() {
@@ -280,8 +284,10 @@ function initQuickChat() {
     getAppIconImage: () => appIconImage,
     getAppConfig,
     DEFAULT_APP_CONFIG,
-    getCopilotUrl: () => COPILOT_URL,
-    getCopilotPartition: () => COPILOT_PARTITION,
+    getAppUrl: () => COPILOT_URL,
+    appLabel: APP_LABEL,
+    appSlug: APP_SLUG,
+    getAppPartition: () => COPILOT_PARTITION,
     SEND_MODE,
     IPC,
     reveal,
@@ -351,7 +357,8 @@ function initDirectOpen() {
   directOpenInstance = createDirectOpen({
     session, shell, fs, path, app, ipcMain,
     getAppConfig,
-    getCopilotPartition: () => COPILOT_PARTITION,
+    getAppPartition: () => COPILOT_PARTITION,
+    appSlug: APP_SLUG,
     safeShowError,
   });
   return directOpenInstance;
@@ -381,11 +388,10 @@ function initSessionHelpers() {
   sessionHelpersInstance = createSessionHelpers({
     app, BrowserWindow, dialog, shell,
     session, clipboard, nativeImage,
-    fs, path,
-
-    getAppConfig,
-    getCopilotPartition: () => COPILOT_PARTITION,
-    getCopilotUrl: () => COPILOT_URL,
+    fs, path, getAppConfig,
+    getAppPartition: () => COPILOT_PARTITION,
+    appLabel: APP_LABEL,
+    getAppUrl: () => COPILOT_URL,
     getConfigFilePath,
     getLogFilePath,
     getMainWindow: () => mainWindow,
@@ -399,11 +405,11 @@ function initSessionHelpers() {
   return sessionHelpersInstance;
 }
 function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
-function getCopilotSession() { return initSessionHelpers().getCopilotSession(); }
-function getActiveCopilotWindow() { return initSessionHelpers().getActiveCopilotWindow(); }
-function getActiveCopilotWebContents() { return initSessionHelpers().getActiveCopilotWebContents(); }
-function reloadCopilot(...a) { return initSessionHelpers().reloadCopilot(...a); }
-function clearCopilotCache() { return initSessionHelpers().clearCopilotCache(); }
+function getCopilotSession() { return initSessionHelpers().getAppSession(); }
+function getActiveCopilotWindow() { return initSessionHelpers().getActiveAppWindow(); }
+function getActiveCopilotWebContents() { return initSessionHelpers().getActiveAppWebContents(); }
+function reloadCopilot(...a) { return initSessionHelpers().reloadApp(...a); }
+function clearCopilotCache() { return initSessionHelpers().clearAppCache(); }
 function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndSignOut(); }
 function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
 function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
@@ -440,7 +446,9 @@ function initAppMenu() {
   appMenuInstance = createAppMenu({
     Menu, MenuItem, BrowserWindow, dialog, shell,
     getAppConfig, getMainWindow: () => mainWindow,
-    openFindModal, initFindInPage, reloadCopilot, clearCopilotCache, clearCookiesAndSignOut,
+    appLabel: APP_LABEL,
+    openFindModal, initFindInPage,
+    reloadApp: reloadCopilot, clearAppCache: clearCopilotCache, clearCookiesAndSignOut,
     copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage,
@@ -720,6 +728,8 @@ function initExporters() {
     dialog,
     safeShowError,
     executeInAllFrames,
+    getAppPartition: () => COPILOT_PARTITION,
+    appSlug: APP_SLUG,
     buildChatPaneDetectionScript,
     cleanupDOMFragmentScript,
     CHAT_SCOPE_PSEUDO,
@@ -728,6 +738,8 @@ function initExporters() {
     getAppConfig,
     DEFAULT_APP_CONFIG,
     normalizeExportFormat,
+    appLabel: APP_LABEL,
+    appSlug: APP_SLUG,
   });
   return exportersInstance;
 }
@@ -798,7 +810,7 @@ function createWindow() {
   // Assign to the outer-scoped variable (do NOT redeclare with const here)
   mainWindow = new BrowserWindow({
     skipTaskbar: false,
-    title: 'Copilot Main Chat',
+    title: APP_LABEL + ' Main Chat',
     width: initialBounds.width,
     height: initialBounds.height,
     x: typeof initialBounds.x === 'number' ? initialBounds.x : undefined,
@@ -863,7 +875,7 @@ function createWindow() {
   // If you initially create hidden:
   mainWindow.once('ready-to-show', () => {
     reveal(mainWindow);
-    try { mainWindow.__copilotRole = 'main'; } catch {}
+    try { mainWindow.__appRole = 'main'; } catch {}
     try { mainWindow.__boundsKey = boundsKey; } catch {}
     setRoleTitle(mainWindow, 'main');
     augmentApplicationMenu(mainWindow);  // Augment the existing app menu with our File/Edit items
