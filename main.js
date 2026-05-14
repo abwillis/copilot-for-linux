@@ -38,8 +38,8 @@ const {
 // User preferences/config under app.getPath('userData')
 // ============================================================================
 const DEFAULT_APP_CONFIG = Object.freeze({
-  copilotUrl: 'https://m365.cloud.microsoft/chat',
-  partition: 'persist:copilot-for-linux',
+  appUrl: 'https://m365.cloud.microsoft/chat',
+  partition: String(process.env.COPILOT_PARTITION ?? 'persist:copilot-for-linux').trim(),
   enableLayoutCss: true,
   enableDirectOpen: true,
   enableQuickChat: true,
@@ -56,7 +56,7 @@ const DEFAULT_APP_CONFIG = Object.freeze({
 
 let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
 let COPILOT_PARTITION = DEFAULT_APP_CONFIG.partition;
-let COPILOT_URL = DEFAULT_APP_CONFIG.copilotUrl;
+let COPILOT_URL = DEFAULT_APP_CONFIG.appUrl;
 const ORIGINAL_CONSOLE = Object.freeze({
   log: console.log.bind(console),
                                        info: console.info.bind(console),
@@ -166,8 +166,13 @@ function normalizeAppConfig(raw = {}) {
   const source = (raw && typeof raw === 'object') ? raw : {};
   const merged = { ...DEFAULT_APP_CONFIG, ...source };
 
-  merged.copilotUrl = String(merged.copilotUrl || DEFAULT_APP_CONFIG.copilotUrl).trim();
-  merged.partition = String(process.env.COPILOT_PARTITION ?? merged.partition ?? DEFAULT_APP_CONFIG.partition).trim();
+  merged.appUrl = String(merged.appUrl || DEFAULT_APP_CONFIG.appUrl).trim();
+
+  merged.partition = String(
+    process.env.COPILOT_PARTITION ??
+    merged.partition ??
+    DEFAULT_APP_CONFIG.partition
+  ).trim();
   merged.enableLayoutCss = normalizeBooleanConfig(merged.enableLayoutCss, DEFAULT_APP_CONFIG.enableLayoutCss);
   merged.enableDirectOpen = normalizeBooleanConfig(merged.enableDirectOpen, DEFAULT_APP_CONFIG.enableDirectOpen);
   merged.enableQuickChat = normalizeBooleanConfig(merged.enableQuickChat, DEFAULT_APP_CONFIG.enableQuickChat);
@@ -181,7 +186,7 @@ function normalizeAppConfig(raw = {}) {
   merged.enableFileLogging = normalizeBooleanConfig(merged.enableFileLogging, DEFAULT_APP_CONFIG.enableFileLogging);
   merged.logFileName = sanitizeLogFileName(merged.logFileName || DEFAULT_APP_CONFIG.logFileName);
 
-  if (!merged.copilotUrl) merged.copilotUrl = DEFAULT_APP_CONFIG.copilotUrl;
+  if (!merged.appUrl) merged.appUrl = DEFAULT_APP_CONFIG.appUrl;
   if (!merged.partition) merged.partition = DEFAULT_APP_CONFIG.partition;
 
   return merged;
@@ -210,7 +215,7 @@ function loadAppConfig() {
 
   APP_CONFIG = normalizeAppConfig(parsed ?? DEFAULT_APP_CONFIG);
   COPILOT_PARTITION = APP_CONFIG.partition;
-  COPILOT_URL = APP_CONFIG.copilotUrl;
+  COPILOT_URL = APP_CONFIG.appUrl;
   applyConsoleLoggingConfig();
 
   try {
@@ -251,6 +256,7 @@ const SEND_MODE = Object.freeze({
   PLAIN: 'plain',
   QUOTE: 'quote',
 });
+const LAYOUT_OBSERVER_GLOBAL = '__copilot_layoutObserver';
 
 // Unified reveal helper to avoid repeated show/focus chains
 function reveal(win) {
@@ -697,6 +703,15 @@ async function getChatPaneSnapshot(...args) {
   return initExporters().getChatPaneSnapshot(...args);
 }
 
+function buildLocateChatRootScript(options = {}) {
+  return buildChatPaneDetectionScript({
+    includeHtml: options.includeHtml !== false,
+    cleanupJunk: !!options.cleanupJunk,
+    selectContent: !!options.selectContent,
+    scrollIntoView: !!options.scrollIntoView,
+  });
+}
+
 // ---------- Chat pane selection helper ----------
 // Select the entire chat pane content in the renderer and return selection stats
 async function selectChatPane(win) {
@@ -725,6 +740,7 @@ function initExporters() {
     safeShowError,
     executeInAllFrames,
     getAppPartition: () => COPILOT_PARTITION,
+    buildLocateChatRootScript,
     appSlug: APP_SLUG,
     buildChatPaneDetectionScript,
     cleanupDOMFragmentScript,
@@ -1009,7 +1025,7 @@ function createTray() {
   });
 }
 
-app.on('ready', () => {
+app.whenReady().then(() => {
   loadAppConfig();
 
   if (APP_CONFIG.enableDirectOpen) {
@@ -1044,14 +1060,14 @@ app.on('before-quit', () => {
   try {
     pruneExpiredDirectOpenRequests();
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.executeJavaScript(`(function(){
+      mainWindow.webContents.executeJavaScript(`(function(observerName){
         try {
-          if (window.__copilot_layoutObserver) {
-            window.__copilot_layoutObserver.disconnect();
-            window.__copilot_layoutObserver = null;
+          if (window[observerName]) {
+            window[observerName].disconnect();
+            window[observerName] = null;
           }
         } catch {}
-      })();`).catch(() => {});
+      })(${JSON.stringify(LAYOUT_OBSERVER_GLOBAL)});`).catch(() => {});
     }
 
     // Best-effort: close quick windows on quit
