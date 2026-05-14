@@ -3,6 +3,8 @@ const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, d
 const path = require('path');
 const fs = require('fs');
 const util = require('util');
+
+const { createIPC } = require('./lib/ipc');
 const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createFindInPage } = require('./lib/find-in-page');
@@ -190,6 +192,10 @@ function writeConfigFile(configPath, config) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
 }
 
+// --- App identity constants (used by all library modules) -------------------
+const APP_LABEL = 'Copilot';
+const APP_SLUG  = 'copilot';
+
 function loadAppConfig() {
   const configPath = getConfigFilePath();
   let parsed = null;
@@ -239,13 +245,7 @@ let trayImage24 = null;  // Cached icon images
 
 // --- Quick Chat / IPC constants --------------------------------------------
 // COPILOT_URL is loaded from config.json under userData.
-
-const IPC = Object.freeze({
-  SEND_SELECTION: 'copilot:send-selection',
-  QUICK_NEW: 'copilot:quick-new',
-  DIRECT_OPEN_LINK: 'copilot:direct-open-link',
-  PRELOAD_PING: 'copilot:preload-ping',
-});
+const IPC = createIPC(APP_SLUG);
 
 const SEND_MODE = Object.freeze({
   PLAIN: 'plain',
@@ -260,10 +260,6 @@ function reveal(win) {
   win.focus();
   try { win.moveTop(); } catch {}
 }
-
-// --- App identity constants (used by all library modules) -------------------
-const APP_LABEL = 'Copilot';
-const APP_SLUG  = 'copilot';
 
 // ---------- Quick Chat module bridge ----------
 let quickChatManager = null;
@@ -821,6 +817,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,      // renderer cannot use Node APIs
       contextIsolation: true,      // safer: isolates preload from page
+      sandbox: false,
       preload: path.join(__dirname, 'preload.js'), // optional: expose safe APIs
                                  partition: COPILOT_PARTITION,
                                  devTools: !!APP_CONFIG.devToolsEnabled,
