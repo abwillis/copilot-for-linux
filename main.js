@@ -18,6 +18,7 @@ const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
 const { createContextMenu } = require('./lib/context-menu');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createAppMenu } = require('./lib/app-menu');
+const { createTrayMenu } = require('./lib/tray-menu');
 
 // === App-specific modules ===
 const {
@@ -473,123 +474,34 @@ function appendFileItems(...args) { return initAppMenu().appendFileItems(...args
 
 // ============================================================================
 
-function buildTrayMenuTemplate() {
-  const activeWindow = getActiveAppWindow();
-  const activeQuick = APP_CONFIG.enableQuickChat ? getActiveQuickChatWindow({ createIfMissing: false }) : null;
-  const activeWindowIsAlwaysOnTop = !!activeWindow?.isAlwaysOnTop?.();
-  const mainVisible = !!mainWindow && !mainWindow.isDestroyed?.() && mainWindow.isVisible?.();
-
-  return [
-    {
-      label: 'Show',
-      enabled: !!mainWindow && !mainWindow.isDestroyed?.(),
-      click: () => {
-        if (mainWindow) reveal(mainWindow);
-        refreshTrayMenu();
-      }
-    },
-    {
-      label: 'Hide',
-      enabled: mainVisible,
-      click: () => {
-        if (mainWindow) mainWindow.hide();
-        refreshTrayMenu();
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'New Quick Chat',
-      accelerator: 'Ctrl+Alt+N',
-      click: () => {
-        try { reveal(createQuickChatWindow()); }
-        catch (err) { console.error('Tray New Quick Chat failed:', err); }
-      }
-    },
-    {
-      label: 'Show Active Quick Chat',
-      accelerator: 'Ctrl+Alt+2',
-      enabled: !!activeQuick,
-      click: () => {
-        const win = getActiveQuickChatWindow({ createIfMissing: false });
-        if (win) reveal(win);
-      }
-    },
-    {
-      label: 'Save Chat Pane',
-      accelerator: 'Ctrl+S',
-      enabled: !!activeWindow && !activeWindow.isDestroyed?.(),
-      click: async () => {
-        const win = getActiveAppWindow();
-        if (win) await promptSaveChatPane(win);
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Reload',
-      accelerator: 'Ctrl+R',
-      click: () => reloadApp({ ignoreCache: false })
-    },
-    {
-      label: 'Toggle Always on Top',
-      type: 'checkbox',
-      checked: activeWindowIsAlwaysOnTop,
-      enabled: !!activeWindow && !activeWindow.isDestroyed?.(),
-      click: () => toggleActiveWindowAlwaysOnTop()
-    },
-    {
-      label: 'Clear Session/Cache',
-      submenu: [
-        {
-          label: 'Clearr' + APP_LABEL + 'Cache',
-          click: async () => {
-            await clearAppCache();
-          }
-        },
-        {
-          label: 'Clear Cookies / Sign Out',
-          click: async () => {
-            await clearCookiesAndSignOut();
-          }
-        }
-      ]
-    },
-    { type: 'separator' },
-    {
-      label: 'Open Logs Folder',
-      click: async () => {
-        await openLogsFolder();
-      }
-    },
-    {
-      label: 'Open Config File',
-      click: async () => {
-        await openConfigFile();
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'About',
-      click: () => showAboutDialog()
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      }
-    }
-  ];
+let trayMenuInstance = null;
+function initTrayMenu() {
+  if (trayMenuInstance) return trayMenuInstance;
+  trayMenuInstance = createTrayMenu({
+    Menu,
+    app,
+    appLabel: APP_LABEL,
+    getTray: () => tray,
+    getMainWindow: () => mainWindow,
+    getAppConfig,
+    getActiveAppWindow,
+    getActiveQuickChatWindow,
+    reveal,
+    createQuickChatWindow,
+    promptSaveChatPane,
+    reloadApp,
+    toggleActiveWindowAlwaysOnTop,
+    clearAppCache,
+    clearCookiesAndSignOut,
+    openLogsFolder,
+    openConfigFile,
+    showAboutDialog,
+    setIsQuitting: (value) => { isQuitting = !!value; },
+  });
+  return trayMenuInstance;
 }
-
-function refreshTrayMenu() {
-  try {
-    if (!tray) return;
-    tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
-  } catch (err) {
-    console.error('refreshTrayMenu failed:', err);
-  }
-}
+function buildTrayMenuTemplate(...args) { return initTrayMenu().buildTrayMenuTemplate(...args); }
+function refreshTrayMenu(...args) { return initTrayMenu().refreshTrayMenu(...args); }
 
 app.setName(appConfig.appName);
 app.setAppUserModelId(appConfig.appUserModelId);
