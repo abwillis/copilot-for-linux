@@ -735,6 +735,7 @@ function createWindow() {
   mainWindow.loadURL(APP_URL);
 
   attachCSSAndLayoutHandlers(mainWindow, { role: 'main', revealOnReady: false });
+  attachWindowStatePersistence(mainWindow, boundsKey, { hideOnClose: true });
   attachFindResultForwarding(mainWindow);
 
   // Keep the 'did-stop-loading' handler singular when SPA navigations occur.
@@ -796,7 +797,6 @@ function createWindow() {
       initFindInPage().handleEscapeStopFind(mainWindow);
     }
   });
-  attachWindowStatePersistence(mainWindow, boundsKey, { hideOnClose: true });
   // Defensive: recreate window if it gets destroyed unexpectedly
   mainWindow.on('closed', () => {
     mainWindow = null;
