@@ -197,8 +197,7 @@ function initSessionHelpers() {
   if (sessionHelpersInstance) return sessionHelpersInstance;
 
   sessionHelpersInstance = createSessionHelpers({
-    app, BrowserWindow, dialog, shell,
-    session, clipboard, nativeImage,
+    app, BrowserWindow, dialog, shell, session, clipboard, nativeImage,
     fs, path, getAppConfig,
     partition: APP_PARTITION,
     appLabel: APP_LABEL,
@@ -206,12 +205,12 @@ function initSessionHelpers() {
     getAppUrl: () => APP_URL,
     getConfigFilePath,
     getLogFilePath,
-    getMainWindow: () => mainWindow,
-    safeShowError,
-
     ensureConfigFile,
-    refreshQuickChatMenu, refreshTrayMenu,
+    getMainWindow: () => mainWindow,
     getAppIconImage: () => appIconImage,
+    safeShowError,
+    refreshTrayMenu,
+    refreshQuickChatMenu,
   });
 
   return sessionHelpersInstance;
@@ -387,7 +386,7 @@ let contextMenuInstance = null;
 function initContextMenu() {
   if (contextMenuInstance) return contextMenuInstance;
   contextMenuInstance = createContextMenu({
-    Menu, MenuItem, clipboard, shell, BrowserWindow, dialog,
+    Menu, MenuItem, clipboard, shell, BrowserWindow, dialog, ipcMain,
     getAppConfig, SEND_MODE, EXPORT_SCOPES,
     selectChatPane, promptSaveChatPane, getSelectionFragment,
     htmlToMarkdown, buildSendToQuickSubmenu, createQuickChatWindow,
@@ -397,6 +396,7 @@ function initContextMenu() {
   return contextMenuInstance;
 }
 function buildContextMenuTemplate(...args) { return initContextMenu().buildContextMenuTemplate(...args); }
+function registerShowContextMenuIpcHandler(...args) { return initContextMenu().registerShowContextMenuIpcHandler(...args); }
 
 // ---------- Quick Chat module bridge ----------
 let quickChatManager = null;
@@ -676,38 +676,7 @@ function createWindow() {
   // Ensure menu bar is visible so users can access Edit    Find
   mainWindow.setMenuBarVisibility(true);
 
-  // --- Right-click native context menu with Cut/Copy/Paste/SelectAll ---
-  const baseContextMenu = Menu.buildFromTemplate([
-    { role: 'cut',        accelerator: 'Ctrl+X', enabled: false },
-    { role: 'copy',       accelerator: 'Ctrl+C', enabled: false },
-    { role: 'paste',      accelerator: 'Ctrl+V', enabled: false },
-    { type: 'separator' },
-    { role: 'selectAll',  accelerator: 'Ctrl+A', enabled: true  },
-  ]);
-
-  function popupContext(win, params) {
-    const menu = Menu.buildFromTemplate(
-      buildContextMenuTemplate(win, {
-        ...params,
-        selectionText: params?.selectionText ?? (params?.hasSelection ? 'x' : '')
-      }, {
-        includeQuickChatFeatures: false,
-        includeChatPaneFeatures: false,
-        includeMarkdownExport: false
-      })
-    );
-    menu.popup({ window: win });
-  }
-
-  // Guard against duplicate registrations
-  if (!ipcMain.listenerCount('show-context-menu')) {
-    ipcMain.on('show-context-menu', (event, params) => {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      if (!win) return;
-      popupContext(win, params);
-    });
-  }
-  // --- end context menu ---
+  registerShowContextMenuIpcHandler();
 
   mainWindow.setIcon(appIconImage || taIcon);
 
