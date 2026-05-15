@@ -479,9 +479,19 @@ function initTrayMenu() {
   if (trayMenuInstance) return trayMenuInstance;
   trayMenuInstance = createTrayMenu({
     Menu,
+    Tray,
+    nativeImage,
+    path,
     app,
+    appConfig,
     appLabel: APP_LABEL,
+    dirname: __dirname,
     getTray: () => tray,
+    setTray: (value) => { tray = value; },
+    getTrayImage24: () => trayImage24,
+    setTrayImage24: (value) => { trayImage24 = value; },
+    getAppIconImage: () => appIconImage,
+    getIconPath,
     getMainWindow: () => mainWindow,
     getAppConfig,
     getActiveAppWindow,
@@ -502,6 +512,7 @@ function initTrayMenu() {
 }
 function buildTrayMenuTemplate(...args) { return initTrayMenu().buildTrayMenuTemplate(...args); }
 function refreshTrayMenu(...args) { return initTrayMenu().refreshTrayMenu(...args); }
+function createTray(...args) { return initTrayMenu().createTray(...args); }
 
 app.setName(appConfig.appName);
 app.setAppUserModelId(appConfig.appUserModelId);
@@ -687,33 +698,6 @@ function createWindow() {
     mainWindow = null;
   });
 }
-function createTray() {
-  // Use a 24x24 or 32x32 PNG for Cinnamon panel
-  const iconPath = getIconPath(appConfig.iconFileName);
-
-  // Validate path during development (optional)
-  //  console.log('Tray icon exists?', require('fs').existsSync(iconPath));
-
-  const trayImage = trayImage24 || nativeImage.createFromPath(iconPath);
-  const smallImage = trayImage.isEmpty ? null : trayImage.resize({ width: 24, height: 24 });
-
-  // Fall back to app icon if tray image is missing
-  tray = new Tray(smallImage || appIconImage || nativeImage.createFromPath(path.join(__dirname, 'assets', appConfig.iconFileName)));
-
-  tray.setToolTip(appConfig.trayToolTip || APP_LABEL);
-  refreshTrayMenu();
-  // Left-click toggles window visibility
-  tray.on('click', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isVisible()) {
-      mainWindow.hide();
-    } else {
-      reveal(mainWindow);
-    }
-    refreshTrayMenu();
-  });
-}
-
 app.whenReady().then(() => {
   loadAppConfig();
 
