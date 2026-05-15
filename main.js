@@ -42,7 +42,7 @@ const DEFAULT_APP_CONFIG = Object.freeze({ ...appConfig.defaultAppConfig });
 
 let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
 let APP_PARTITION = DEFAULT_APP_CONFIG.partition;
-let APP_URL = DEFAULT_APP_CONFIG.appUr
+let APP_URL = DEFAULT_APP_CONFIG.appUrl;
 
 // --- App identity constants (used by all library modules) -------------------
 const APP_LABEL = appConfig.appLabel;
@@ -95,7 +95,7 @@ let trayImage24 = null;  // Cached icon images
 
 
 // --- Quick Chat / IPC constants --------------------------------------------
-// COPILOT_URL is loaded from config.json under userData.
+// APP_URL is loaded from config.json under userData.
 const IPC = createIPC(APP_SLUG);
 
 const SEND_MODE = Object.freeze({
