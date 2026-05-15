@@ -2,9 +2,9 @@
 const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const util = require('util');
 
 const { createIPC } = require('./lib/ipc');
+const { createRuntimeConfig } = require('./lib/runtime-config');
 const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createFindInPage } = require('./lib/find-in-page');
@@ -57,185 +57,45 @@ const DEFAULT_APP_CONFIG = Object.freeze({
 let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
 let COPILOT_PARTITION = DEFAULT_APP_CONFIG.partition;
 let COPILOT_URL = DEFAULT_APP_CONFIG.appUrl;
-const ORIGINAL_CONSOLE = Object.freeze({
-  log: console.log.bind(console),
-                                       info: console.info.bind(console),
-                                       debug: console.debug.bind(console),
-                                       warn: console.warn.bind(console),
-                                       error: console.error.bind(console),
-});
-let consoleLoggingEnabled = true;
-let fileLoggingEnabled = false;
-let activeLogFilePath = null;
-let isWritingLogFile = false;
-
-function sanitizeLogFileName(name) {
-  const raw = String(name || DEFAULT_APP_CONFIG.logFileName).trim() || DEFAULT_APP_CONFIG.logFileName;
-  const cleaned = raw
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned || DEFAULT_APP_CONFIG.logFileName;
-}
-
-function getLogFilePath() {
-  return path.join(getLogsFolderPath(), sanitizeLogFileName(APP_CONFIG.logFileName));
-}
-
-function formatConsoleArg(value) {
-  if (typeof value === 'string') return value;
-  if (value instanceof Error) return value.stack || value.message || String(value);
-  return util.inspect(value, {
-    depth: 6,
-    colors: false,
-    breakLength: 140,
-    maxArrayLength: 100,
-    maxStringLength: 10000
-  });
-}
-
-function appendConsoleLogToFile(level, args) {
-  if (!fileLoggingEnabled || isWritingLogFile) return;
-  isWritingLogFile = true;
-  try {
-    const filePath = activeLogFilePath || getLogFilePath();
-    const line = `[${new Date().toISOString()}] [${String(level).toUpperCase()}] ${args.map(formatConsoleArg).join(' ')}\n`;
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, line, 'utf8');
-  } catch (err) {
-    try { ORIGINAL_CONSOLE.error('File logging failed:', err); } catch {}
-  } finally {
-    isWritingLogFile = false;
-  }
-}
-
-function makeConsoleMethod(level) {
-  return (...args) => {
-    if (consoleLoggingEnabled) {
-      try { ORIGINAL_CONSOLE[level](...args); } catch {}
-    }
-    appendConsoleLogToFile(level, args);
-  };
-}
-
-function applyConsoleLoggingConfig() {
-  consoleLoggingEnabled = normalizeBooleanConfig(APP_CONFIG.enableConsoleLogging, DEFAULT_APP_CONFIG.enableConsoleLogging);
-  fileLoggingEnabled = normalizeBooleanConfig(APP_CONFIG.enableFileLogging, DEFAULT_APP_CONFIG.enableFileLogging);
-  activeLogFilePath = fileLoggingEnabled ? getLogFilePath() : null;
-
-  console.log = makeConsoleMethod('log');
-  console.info = makeConsoleMethod('info');
-  console.debug = makeConsoleMethod('debug');
-  console.warn = makeConsoleMethod('warn');
-  console.error = makeConsoleMethod('error');
-}
-
-function getConfigFilePath() {
-  return path.join(app.getPath('userData'), 'config.json');
-}
-
-function normalizeBooleanConfig(value, fallback) {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    const lowered = value.trim().toLowerCase();
-    if (['true', '1', 'yes', 'on'].includes(lowered)) return true;
-    if (['false', '0', 'no', 'off'].includes(lowered)) return false;
-  }
-  return fallback;
-}
-
-function normalizePositiveIntegerConfig(value, fallback) {
-  const n = Number(value);
-  if (Number.isFinite(n) && n >= 0) return Math.round(n);
-  return fallback;
-}
-
-function normalizeExportFormat(value, fallback) {
-  const fmt = String(value ?? fallback).trim().toLowerCase().replace(/^\./, '');
-  return ['md', 'markdown', 'pdf', 'html', 'mhtml', 'txt'].includes(fmt) ? fmt : fallback;
-}
-
-function normalizeExportProfile(value, fallback) {
-  const profile = String(value ?? fallback).trim();
-  return ['cleanMarkdown', 'rawMarkdown', 'markdownWithMetadata', 'html', 'htmlArchive', 'plainText', 'pdf'].includes(profile)
-    ? profile
-    : fallback;
-}
-
-function normalizeAppConfig(raw = {}) {
-  const source = (raw && typeof raw === 'object') ? raw : {};
-  const merged = { ...DEFAULT_APP_CONFIG, ...source };
-
-  merged.appUrl = String(merged.appUrl || DEFAULT_APP_CONFIG.appUrl).trim();
-
-  merged.partition = String(
-    process.env.COPILOT_PARTITION ??
-    merged.partition ??
-    DEFAULT_APP_CONFIG.partition
-  ).trim();
-  merged.enableLayoutCss = normalizeBooleanConfig(merged.enableLayoutCss, DEFAULT_APP_CONFIG.enableLayoutCss);
-  merged.enableDirectOpen = normalizeBooleanConfig(merged.enableDirectOpen, DEFAULT_APP_CONFIG.enableDirectOpen);
-  merged.enableQuickChat = normalizeBooleanConfig(merged.enableQuickChat, DEFAULT_APP_CONFIG.enableQuickChat);
-  merged.defaultExportFormat = normalizeExportFormat(merged.defaultExportFormat, DEFAULT_APP_CONFIG.defaultExportFormat);
-  merged.defaultPaneExportProfile = normalizeExportProfile(merged.defaultPaneExportProfile, DEFAULT_APP_CONFIG.defaultPaneExportProfile);
-  merged.defaultSelectionExportProfile = normalizeExportProfile(merged.defaultSelectionExportProfile, DEFAULT_APP_CONFIG.defaultSelectionExportProfile);
-  merged.quickPasteDelayMs = normalizePositiveIntegerConfig(merged.quickPasteDelayMs, DEFAULT_APP_CONFIG.quickPasteDelayMs);
-  merged.findContentVisibilityOverride = normalizeBooleanConfig(merged.findContentVisibilityOverride, DEFAULT_APP_CONFIG.findContentVisibilityOverride);
-  merged.devToolsEnabled = normalizeBooleanConfig(merged.devToolsEnabled, DEFAULT_APP_CONFIG.devToolsEnabled);
-  merged.enableConsoleLogging = normalizeBooleanConfig(merged.enableConsoleLogging, DEFAULT_APP_CONFIG.enableConsoleLogging);
-  merged.enableFileLogging = normalizeBooleanConfig(merged.enableFileLogging, DEFAULT_APP_CONFIG.enableFileLogging);
-  merged.logFileName = sanitizeLogFileName(merged.logFileName || DEFAULT_APP_CONFIG.logFileName);
-
-  if (!merged.appUrl) merged.appUrl = DEFAULT_APP_CONFIG.appUrl;
-  if (!merged.partition) merged.partition = DEFAULT_APP_CONFIG.partition;
-
-  return merged;
-}
-
-function writeConfigFile(configPath, config) {
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-}
 
 // --- App identity constants (used by all library modules) -------------------
 const APP_LABEL = 'Copilot';
 const APP_SLUG  = 'copilot';
 
-function loadAppConfig() {
-  const configPath = getConfigFilePath();
-  let parsed = null;
+// ============================================================================
+// Runtime config/logging
+// ============================================================================
+const runtimeConfig = createRuntimeConfig({
+  app,
+  fs,
+  path,
+  defaultAppConfig: DEFAULT_APP_CONFIG,
+  partitionEnvVar: 'COPILOT_PARTITION',
+  onConfigLoaded(config) {
+    APP_CONFIG = config;
+    COPILOT_PARTITION = config.partition;
+    COPILOT_URL = config.appUrl;
+  },
+});
 
-  try {
-    if (fs.existsSync(configPath)) {
-      parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    }
-  } catch (err) {
-    console.error('Failed to read config.json; using defaults:', err);
-  }
-
-  APP_CONFIG = normalizeAppConfig(parsed ?? DEFAULT_APP_CONFIG);
-  COPILOT_PARTITION = APP_CONFIG.partition;
-  COPILOT_URL = APP_CONFIG.appUrl;
-  applyConsoleLoggingConfig();
-
-  try {
-    // Keep the file self-documenting and add any newly introduced defaults.
-    writeConfigFile(configPath, APP_CONFIG);
-  } catch (err) {
-    console.error('Failed to write config.json:', err);
-  }
-
-  return APP_CONFIG;
-}
-
-function getAppConfig() {
-  return APP_CONFIG;
-}
-
-async function ensureConfigFile() {
-  loadAppConfig();
-  return getConfigFilePath();
-}
+const {
+  sanitizeLogFileName,
+  getConfigFilePath,
+  getLogFilePath,
+  formatConsoleArg,
+  appendConsoleLogToFile,
+  makeConsoleMethod,
+  applyConsoleLoggingConfig,
+  normalizeBooleanConfig,
+  normalizePositiveIntegerConfig,
+  normalizeExportFormat,
+  normalizeExportProfile,
+  normalizeAppConfig,
+  writeConfigFile,
+  loadAppConfig,
+  ensureConfigFile,
+  getAppConfig,
+} = runtimeConfig;
 
 let mainWindow = null;
 let tray = null;
