@@ -296,13 +296,6 @@ async function executeInAllFrames(win, source) {
   return results;
 }
 
-async function findBestChatRoot(...args) {
-  return initExporters().findBestChatRoot(...args);
-}
-
-async function getChatPaneSnapshot(...args) {
-  return initExporters().getChatPaneSnapshot(...args);
-}
 
 function buildLocateChatRootScript(options = {}) {
   return buildChatPaneDetectionScript({
@@ -356,13 +349,16 @@ function initExporters() {
   });
   return exportersInstance;
 }
-
+async function findBestChatRoot(...args) { return initExporters().findBestChatRoot(...args); }
+async function getChatPaneSnapshot(...args) { return initExporters().getChatPaneSnapshot(...args); }
 function htmlToMarkdown(...args) { return initExporters().htmlToMarkdown(...args); }
 function stripTags(...args) { return initExporters().stripTags(...args); }
 function decodeEntities(...args) { return initExporters().decodeEntities(...args); }
 function stripExecutableBlocks(...args) { return initExporters().stripExecutableBlocks(...args); }
 async function getSelectionFragment(...args) { return initExporters().getSelectionFragment(...args); }
 async function getSelectionFragmentRaw(...args) { return initExporters().getSelectionFragmentRaw(...args); }
+async function buildSelectionMarkdownForExport(...args) { return initExporters().buildSelectionMarkdownForExport(...args); }
+async function promptSaveChatPane(...args) { return initExporters().promptSaveChatPane(...args); }
 async function saveSelectionAsMarkdown(...args) { return initExporters().saveSelectionAsMarkdown(...args); }
 async function saveSelectionAsCleanMarkdown(...args) { return initExporters().saveSelectionAsCleanMarkdown(...args); }
 async function saveSelectionAsRawMarkdown(...args) { return initExporters().saveSelectionAsRawMarkdown(...args); }
@@ -375,7 +371,6 @@ async function saveChatPaneByProfile(...args) { return initExporters().saveChatP
 async function saveSelectionByProfile(...args) { return initExporters().saveSelectionByProfile(...args); }
 async function promptExportWithProfile(...args) { return initExporters().promptExportWithProfile(...args); }
 function buildExportProfileMenuTemplate(...args) { return initExporters().buildExportProfileMenuTemplate(...args); }
-async function promptSaveChatPane(...args) { return initExporters().promptSaveChatPane(...args); }
 async function saveChatPaneAsMarkdown(...args) { return initExporters().saveChatPaneAsMarkdown(...args); }
 async function saveChatPaneAsRawMarkdown(...args) { return initExporters().saveChatPaneAsRawMarkdown(...args); }
 async function saveChatPaneAsMarkdownWithMetadata(...args) { return initExporters().saveChatPaneAsMarkdownWithMetadata(...args); }
@@ -444,7 +439,6 @@ function initQuickChat() {
   quickChatManager.registerIpcHandlers();
   return quickChatManager;
 }
-
 function normalizeSendOptions(...args) { return initQuickChat().normalizeSendOptions(...args); }
 function quoteify(...args) { return initQuickChat().quoteify(...args); }
 function getQuickDisplayName(...args) { return initQuickChat().getQuickDisplayName(...args); }
@@ -488,7 +482,6 @@ function initAppMenu() {
 
   return appMenuInstance;
 }
-
 function appendEditItems(...args) { return initAppMenu().appendEditItems(...args); }
 function appendHelpItems(...args) { return initAppMenu().appendHelpItems(...args); }
 function appendSessionItems(...args) { return initAppMenu().appendSessionItems(...args); }
