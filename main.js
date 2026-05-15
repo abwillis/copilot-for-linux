@@ -20,6 +20,7 @@ const { createQuickChatManager } = require('./lib/quick-chat');
 const { createAppMenu } = require('./lib/app-menu');
 const { createTrayMenu } = require('./lib/tray-menu');
 const { createWindowHelpers } = require('./lib/window-helpers');
+const { createMainWindowManager } = require('./lib/main-window');
 const { createIconHelpers } = require('./lib/icon-helpers');
 
 // === App-specific modules ===
@@ -469,158 +470,48 @@ function initIconHelpers() {
 }
 function getIconPath(...args) { return initIconHelpers().getIconPath(...args); }
 
-function createWindow() {
-  // Clean up any existing window first
-  if (mainWindow) return; // do not destroy/recreate unless needed
-
-  const taIcon = nativeImage.createFromPath(getIconPath(appConfig.iconFileName));
-  /*     console.log('Native path resolved:', taIcon); // Echo to terminal
-   * if (taIcon.isEmpty()) {
-   *  console.error('ICON FAILED TO LOAD path is wrong or file corrupted');
-} else {
-  console.log('ICON LOADED SUCCESSFULLY');
-  console.log('Size:', taIcon.getSize());           //    { width: 512, height: 512 }
-  console.log('Has alpha channel:', taIcon.hasAlpha?.() ?? true);
+let mainWindowManagerInstance = null;
+function initMainWindowManager() {
+  if (mainWindowManagerInstance) return mainWindowManagerInstance;
+  mainWindowManagerInstance = createMainWindowManager({
+    BrowserWindow,
+    Menu,
+    nativeImage,
+    shell,
+    path,
+    dirname: __dirname,
+    appConfig,
+    appLabel: APP_LABEL,
+    getAppConfig,
+    getAppUrl: () => APP_URL,
+    getAppPartition: () => APP_PARTITION,
+    getMainWindow: () => mainWindow,
+    setMainWindow: (value) => { mainWindow = value; },
+    getAppIconImage: () => appIconImage,
+    setAppIconImage: (value) => { appIconImage = value; },
+    getTrayImage24: () => trayImage24,
+    setTrayImage24: (value) => { trayImage24 = value; },
+    getIconPath,
+    getInitialWindowBounds,
+    reveal,
+    setRoleTitle,
+    augmentApplicationMenu,
+    registerShowContextMenuIpcHandler,
+    ensureDidStopLoadingHandler,
+    attachCSSAndLayoutHandlers,
+    attachWindowStatePersistence,
+    attachFindResultForwarding,
+    onDidStopLoading,
+    buildContextMenuTemplate,
+    registerFindIpcHandlers: () => initFindInPage().registerFindIpcHandlers(),
+    handleEscapeStopFind: (...args) => initFindInPage().handleEscapeStopFind(...args),
+    enableLayoutWidthKeyboardShortcuts: true,
+    layoutWidthKeyboardApiPrefix: `__${APP_SLUG}`,
+    defaultVwSize: VW_SIZE,
+  });
+  return mainWindowManagerInstance;
 }
-*/
-  // Cache app icon & tray sizes once
-  if (!appIconImage || appIconImage.isEmpty()) {
-    appIconImage = taIcon;
-  }
-  if (!trayImage24 || trayImage24.isEmpty?.()) {
-    try { trayImage24 = taIcon.resize({ width: 24, height: 24 }); } catch {}
-  }
-
-  // Compute initial bounds from persisted state (if any)
-  const boundsKey = 'main';
-  // Compute initial bounds from persisted state (if any)
-  const initialBounds = getInitialWindowBounds(boundsKey);
-  // Assign to the outer-scoped variable (do NOT redeclare with const here)
-  mainWindow = new BrowserWindow({
-    skipTaskbar: false,
-    title: APP_LABEL + ' Main Chat',
-    width: initialBounds.width,
-    height: initialBounds.height,
-    x: typeof initialBounds.x === 'number' ? initialBounds.x : undefined,
-    y: typeof initialBounds.y === 'number' ? initialBounds.y : undefined,
-    show: false, // start hidden; control via tray
-    //    icon: path.join(__dirname, 'assets', 'copilot-for-linux.png'), // used for window/taskbar on Linux
-    icon: appIconImage || taIcon, // cached if available
-    webPreferences: {
-      nodeIntegration: false,      // renderer cannot use Node APIs
-      contextIsolation: true,      // safer: isolates preload from page
-      sandbox: false,
-      preload: path.join(__dirname, 'preload.js'), // optional: expose safe APIs
-      partition: APP_PARTITION,
-      devTools: !!APP_CONFIG.devToolsEnabled,
-      backgroundThrottling: true,   // reduce CPU when hidden
-      spellcheck: false            // disable if not required
-    },
-    // Linux-specific: ensure proper window identification
-    type: 'normal',
-    // Help with focus stealing prevention
-    autoHideMenuBar: false
-
-  });
-
-  // Ensure menu bar is visible so users can access Edit    Find
-  mainWindow.setMenuBarVisibility(true);
-
-  registerShowContextMenuIpcHandler();
-
-  mainWindow.setIcon(appIconImage || taIcon);
-
-  // If you initially create hidden:
-  mainWindow.once('ready-to-show', () => {
-    reveal(mainWindow);
-    try { mainWindow.__appRole = 'main'; } catch {}
-    try { mainWindow.__boundsKey = boundsKey; } catch {}
-    setRoleTitle(mainWindow, 'main');
-    augmentApplicationMenu(mainWindow);  // Augment the existing app menu with our File/Edit items
-  });
-  // Safety in case it was toggled elsewhere:
-  mainWindow.setSkipTaskbar(false);
-
-  // Attach 'did-stop-loading' exactly once for this webContents.
-  ensureDidStopLoadingHandler(mainWindow.webContents);
-
-  // Electron internally attaches temporary did-stop-loading listeners
-  // during executeJavaScript(); this is expected for SPA apps.
-  mainWindow.webContents.setMaxListeners(0);
-  // OPTIONAL: uncomment this to trace *where* extra listeners are being added:
-  // const _origOn = mainWindow.webContents.on.bind(mainWindow.webContents);
-  // mainWindow.webContents.on = (evt, fn) => { if (evt === 'did-stop-loading') console.trace('[TRACE] did-stop-loading on()'); return _origOn(evt, fn); };
-
-  mainWindow.loadURL(APP_URL);
-
-  attachCSSAndLayoutHandlers(mainWindow, { role: 'main', revealOnReady: false });
-  attachWindowStatePersistence(mainWindow, boundsKey, { hideOnClose: true });
-  attachFindResultForwarding(mainWindow);
-
-  // Keep the 'did-stop-loading' handler singular when SPA navigations occur.
-  mainWindow.webContents.on('did-start-navigation', () => {
-    //   try { attachVWResize(mainWindow); } catch {}
-  });
-  mainWindow.webContents.on('destroyed', () => {
-    try { mainWindow?.webContents?.removeListener('did-stop-loading', onDidStopLoading);
-      if (mainWindow?.webContents) {
-        delete mainWindow.webContents.__hasDidStopLoadingHandler;
-      }
-    } catch {}
-  });
-
-  mainWindow.webContents.on('context-menu', (_event, params) => {
-    let menu;
-    try {
-      menu = Menu.buildFromTemplate(
-        buildContextMenuTemplate(mainWindow, params, {
-          includeQuickChatFeatures: APP_CONFIG.enableQuickChat,
-          includeChatPaneFeatures: true,
-          includeMarkdownExport: true
-        })
-      );
-    }
-    catch (err) {
-      console.error('Context menu template error:', err);
-      const hasSelection = !!params?.selectionText && params.selectionText.length > 0;
-      menu = Menu.buildFromTemplate([{ role: 'copy', enabled: hasSelection }, { role: 'selectAll' }]);
-    }
-    try { menu.popup({ window: mainWindow }); }
-    catch (err) { console.error('Context menu popup failed:', err); }
-  });
-
-  // Control external links safely
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => (
-    shell.openExternal(url), // open in default browser
-                                                            { action: 'deny' }       // block new Electron window
-  ));
-
-  // Handle Find modal events (parent-aware)
-  initFindInPage().registerFindIpcHandlers();
-
-  // Quick keyboard passthrough for Esc to clear highlights even without menu activation
-
-  mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.control && input.alt) {
-      if (input.key === '=' || input.key === '+') {
-        event.preventDefault();
-        try { mainWindow.webContents.executeJavaScript('(function(){const cur=window.__copilot_getTargetVW?.() ?? ${VW_SIZE}; window.__copilot_setTargetVW?.(cur+5);})()'); } catch {}
-      }
-      if (input.key === '-') {
-        event.preventDefault();
-        try { mainWindow.webContents.executeJavaScript('(function(){const cur=window.__copilot_getTargetVW?.() ?? ${VW_SIZE}; window.__copilot_setTargetVW?.(cur-5);})()'); } catch {}
-      }
-    }
-    if (input.type === 'keyDown' && input.key === 'Escape') {
-      const wc = mainWindow.webContents;
-      initFindInPage().handleEscapeStopFind(mainWindow);
-    }
-  });
-  // Defensive: recreate window if it gets destroyed unexpectedly
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-}
+function createWindow(...args) { return initMainWindowManager().createWindow(...args); }
 app.whenReady().then(() => {
   loadAppConfig();
 
