@@ -21,6 +21,7 @@ const { createAppMenu } = require('./lib/app-menu');
 const { createTrayMenu } = require('./lib/tray-menu');
 const { createWindowHelpers } = require('./lib/window-helpers');
 const { createMainWindowManager } = require('./lib/main-window');
+const { createMainBootstrap } = require('./main.bootstrap');
 const { createIconHelpers } = require('./lib/icon-helpers');
 
 // === App-specific modules ===
@@ -228,7 +229,9 @@ function initDirectOpen() {
   return directOpenInstance;
 }
 function registerDirectOpenDownloadHandler(...args) { return initDirectOpen().registerDirectOpenDownloadHandler(...args); }
+function registerDirectOpenIpcHandler(...args) { return initDirectOpen().registerDirectOpenIpcHandler(...args); }
 function pruneExpiredDirectOpenRequests(...args) { return initDirectOpen().pruneExpiredDirectOpenRequests(...args); }
+function cleanupTempFiles(...args) { return initDirectOpen().cleanupTempFiles(...args); }
 function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
 
 
@@ -512,53 +515,31 @@ function initMainWindowManager() {
   return mainWindowManagerInstance;
 }
 function createWindow(...args) { return initMainWindowManager().createWindow(...args); }
-app.whenReady().then(() => {
-  loadAppConfig();
-
-  if (APP_CONFIG.enableDirectOpen) {
-    initDirectOpen().registerDirectOpenIpcHandler(IPC);
-    registerDirectOpenDownloadHandler();
-  }
-
-  createWindow();
-  createTray();
-
-  // createAppMenu();
-
-  // macOS re-activation guard (harmless on Linux)
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    else if (mainWindow) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+// ============================================================
+// App lifecycle
+// ============================================================
+let mainBootstrapInstance = null;
+function initMainBootstrap() {
+  if (mainBootstrapInstance) return mainBootstrapInstance;
+  mainBootstrapInstance = createMainBootstrap({
+    app,
+    BrowserWindow,
+    appConfig,
+    getAppConfig,
+    loadAppConfig,
+    getLayoutObserverGlobal: () => LAYOUT_OBSERVER_GLOBAL,
+    getMainWindow: () => mainWindow,
+    setIsQuitting: (value) => { isQuitting = !!value; },
+    createWindow,
+    createTray,
+    registerDirectOpenIpcHandler: () => registerDirectOpenIpcHandler(IPC),
+    registerDirectOpenDownloadHandler,
+    pruneExpiredDirectOpenRequests,
+    cleanupTempFiles,
+    closeAllQuickChatWindows,
   });
-});
+  return mainBootstrapInstance;
+}
+function bootstrapApp(...args) { return initMainBootstrap().bootstrapApp(...args); }
 
-// Keep the app running in the tray when all windows are closed
-app.on('window-all-closed', () => {
-  // Do not quit on Linux; keep tray resident
-  // If you want to quit on non-Linux:
-  // if (process.platform !== 'linux') app.quit();
-});
-
-app.on('before-quit', () => {
-  isQuitting = true;
-  try {
-    pruneExpiredDirectOpenRequests();
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.executeJavaScript(`(function(observerName){
-        try {
-          if (window[observerName]) {
-            window[observerName].disconnect();
-            window[observerName] = null;
-          }
-        } catch {}
-      })(${JSON.stringify(LAYOUT_OBSERVER_GLOBAL)});`).catch(() => {});
-    }
-
-    // Best-effort: close quick windows on quit
-    try { closeAllQuickChatWindows(); } catch {}
-    try { initDirectOpen().cleanupTempFiles(); } catch {}
-  } catch {}
-});
+bootstrapApp();
