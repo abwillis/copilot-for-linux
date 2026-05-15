@@ -27,6 +27,7 @@ const {
   EXPORT_ROOT_CLASS, EXPORT_ROOT_SELECTOR,
   CODE_PREVIEW_IFRAME_SELECTOR, DOM_CLEANUP_SELECTORS,
   cleanupDOMFragmentScript, buildChatPaneDetectionScript,
+  buildLocateChatRootScript,
 } = require('./lib/chat-dom');
 
 const {
@@ -297,15 +298,6 @@ async function executeInAllFrames(win, source) {
   return results;
 }
 
-
-function buildLocateChatRootScript(options = {}) {
-  return buildChatPaneDetectionScript({
-    includeHtml: options.includeHtml !== false,
-    cleanupJunk: !!options.cleanupJunk,
-    selectContent: !!options.selectContent,
-    scrollIntoView: !!options.scrollIntoView,
-  });
-}
 
 // ---------- Chat pane selection helper ----------
 // Select the entire chat pane content in the renderer and return selection stats
