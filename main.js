@@ -113,217 +113,6 @@ function reveal(win) {
   try { win.moveTop(); } catch {}
 }
 
-// ---------- Quick Chat module bridge ----------
-let quickChatManager = null;
-function initQuickChat() {
-  if (quickChatManager) return quickChatManager;
-  quickChatManager = createQuickChatManager({
-    app,
-    BrowserWindow,
-    Menu,
-    MenuItem,
-    ipcMain,
-    dialog,
-    shell,
-    clipboard,
-    path,
-    dirname: __dirname,
-    getMainWindow: () => mainWindow,
-    getAppIconImage: () => appIconImage,
-    getAppConfig,
-    DEFAULT_APP_CONFIG,
-    getAppUrl: () => APP_URL,
-    appLabel: APP_LABEL,
-    appSlug: APP_SLUG,
-    getAppPartition: () => APP_PARTITION,
-    SEND_MODE,
-    IPC,
-    reveal,
-    safeShowError,
-    getInitialWindowBounds,
-    attachWindowStatePersistence,
-    attachCSSAndLayoutHandlers,
-    attachFindResultForwarding,
-    ensureDidStopLoadingHandler,
-    onDidStopLoading,
-    buildContextMenuTemplate,
-    getSelectionFragment,
-    htmlToMarkdown,
-    refreshTrayMenu,
-  });
-  quickChatManager.registerIpcHandlers();
-  return quickChatManager;
-}
-
-function normalizeSendOptions(...args) { return initQuickChat().normalizeSendOptions(...args); }
-function quoteify(...args) { return initQuickChat().quoteify(...args); }
-function getQuickDisplayName(...args) { return initQuickChat().getQuickDisplayName(...args); }
-function updateQuickWindowTitle(...args) { return initQuickChat().updateQuickWindowTitle(...args); }
-function setRoleTitle(...args) { return initQuickChat().setRoleTitle(...args); }
-function closeQuickChatWindow(...args) { return initQuickChat().closeQuickChatWindow(...args); }
-function closeAllQuickChatWindows(...args) { return initQuickChat().closeAllQuickChatWindows(...args); }
-function getQuickById(...args) { return initQuickChat().getQuickById(...args); }
-function listQuickIds(...args) { return initQuickChat().listQuickIds(...args); }
-function getActiveQuickChatWindow(...args) { return initQuickChat().getActiveQuickChatWindow(...args); }
-function getTargetQuickWindow(...args) { return initQuickChat().getTargetQuickWindow(...args); }
-function buildQuickChatManagerMenuTemplate(...args) { return initQuickChat().buildQuickChatManagerMenuTemplate(...args); }
-function installQuickChatMenu(...args) { return initQuickChat().installQuickChatMenu(...args); }
-function refreshQuickChatMenu(...args) { return initQuickChat().refreshQuickChatMenu(...args); }
-function scheduleQuickPaste(...args) { return initQuickChat().scheduleQuickPaste(...args); }
-function createQuickChatWindow(...args) { return initQuickChat().createQuickChatWindow(...args); }
-async function sendSelectionToQuick(...args) { return initQuickChat().sendSelectionToQuick(...args); }
-async function sendSelectionToSpecificQuickViaDialog(...args) { return initQuickChat().sendSelectionToSpecificQuickViaDialog(...args); }
-function buildSendToQuickSubmenu(...args) { return initQuickChat().buildSendToQuickSubmenu(...args); }
-
-// ---------- Find-in-page module bridge ----------
-let findInPageInstance = null;
-function initFindInPage() {
-  if (findInPageInstance) return findInPageInstance;
-  findInPageInstance = createFindInPage({
-    BrowserWindow,
-    ipcMain,
-    screen,
-    getMainWindow: () => mainWindow,
-    getAppConfig,
-    enableFindContentVisibility,
-    disableFindContentVisibility,
-  });
-  return findInPageInstance;
-}
-function openFindModal(...args) { return initFindInPage().openFindModal(...args); }
-function attachFindResultForwarding(...args) { return initFindInPage().attachFindResultForwarding(...args); }
-function resetFindModalResults(...args) { return initFindInPage().resetFindModalResults(...args); }
-function sendFindModalResults(...args) { return initFindInPage().sendFindModalResults(...args); }
-function getWCFromEventSender(...args) { return initFindInPage().getWCFromEventSender(...args); }
-function getWC(...args) { return initFindInPage().getWC(...args); }
-function applyWordStartOptions(...args) { return initFindInPage().applyWordStartOptions(...args); }
-
-// ---------- Direct-open module bridge ----------
-let directOpenInstance = null;
-function initDirectOpen() {
-  if (directOpenInstance) return directOpenInstance;
-  directOpenInstance = createDirectOpen({
-    session, shell, fs, path, app, ipcMain,
-    getAppConfig,
-    getAppPartition: () => APP_PARTITION,
-    appSlug: APP_SLUG,
-    safeShowError,
-  });
-  return directOpenInstance;
-}
-function registerDirectOpenDownloadHandler() { return initDirectOpen().registerDirectOpenDownloadHandler(); }
-function pruneExpiredDirectOpenRequests() { return initDirectOpen().pruneExpiredDirectOpenRequests(); }
-function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
-
-// ---------- Window-state module bridge ----------
-let windowStateInstance = null;
-function initWindowState() {
-  if (windowStateInstance) return windowStateInstance;
-  windowStateInstance = createWindowState({ app, path, fs, screen, getIsQuitting: () => isQuitting });
-  return windowStateInstance;
-}
-function attachWindowStatePersistence(...args) { return initWindowState().attachWindowStatePersistence(...args); }
-function getInitialWindowBounds(...args) { return initWindowState().getInitialWindowBounds(...args); }
-function scheduleSaveWindowState(...args) { return initWindowState().scheduleSaveWindowState(...args); }
-function loadWindowState(...args) { return initWindowState().loadWindowState(...args); }
-function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyDisplay(...args); }
-
-// ---------- Session-helpers module bridge ----------
-let sessionHelpersInstance = null;
-function initSessionHelpers() {
-  if (sessionHelpersInstance) return sessionHelpersInstance;
-
-  sessionHelpersInstance = createSessionHelpers({
-    app, BrowserWindow, dialog, shell,
-    session, clipboard, nativeImage,
-    fs, path, getAppConfig,
-    partition: APP_PARTITION,
-    appLabel: APP_LABEL,
-    getAppPartition: () => APP_PARTITION,
-    getAppUrl: () => APP_URL,
-    getConfigFilePath,
-    getLogFilePath,
-    getMainWindow: () => mainWindow,
-    safeShowError,
-
-    ensureConfigFile,
-    refreshQuickChatMenu, refreshTrayMenu,
-    getAppIconImage: () => appIconImage,
-  });
-
-  return sessionHelpersInstance;
-}
-function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
-function getCopilotSession() { return initSessionHelpers().getAppSession(); }
-function getActiveCopilotWindow() { return initSessionHelpers().getActiveAppWindow(); }
-function getActiveCopilotWebContents() { return initSessionHelpers().getActiveAppWebContents(); }
-function reloadCopilot(...a) { return initSessionHelpers().reloadApp(...a); }
-function clearCopilotCache() { return initSessionHelpers().clearAppCache(); }
-function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndSignOut(); }
-function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
-function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
-function getLogsFolderPath() { return initSessionHelpers().getLogsFolderPath(); }
-function openPathWithError(...a) { return initSessionHelpers().openPathWithError(...a); }
-function openLogsFolder() { return initSessionHelpers().openLogsFolder(); }
-function openConfigFile() { return initSessionHelpers().openConfigFile(); }
-function toggleActiveWindowAlwaysOnTop() { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(); }
-function showAboutDialog() { return initSessionHelpers().showAboutDialog(); }
-function showApplicationHelp() { return initSessionHelpers().showApplicationHelp(); }
-
-
-// ---------- Context-menu module bridge ----------
-let contextMenuInstance = null;
-function initContextMenu() {
-  if (contextMenuInstance) return contextMenuInstance;
-  contextMenuInstance = createContextMenu({
-    Menu, MenuItem, clipboard, shell, BrowserWindow, dialog,
-    getAppConfig, SEND_MODE, EXPORT_SCOPES,
-    selectChatPane, promptSaveChatPane, getSelectionFragment,
-    htmlToMarkdown, buildSendToQuickSubmenu, createQuickChatWindow,
-    promptExportWithProfile, buildExportProfileMenuTemplate,
-    openFindModal, reveal, safeShowError, saveSelectionAsMarkdown,
-  });
-  return contextMenuInstance;
-}
-function buildContextMenuTemplate(...a) { return initContextMenu().buildContextMenuTemplate(...a); }
-
-// ---------- App-menu module bridge ----------
-let appMenuInstance = null;
-
-function initAppMenu() {
-  if (appMenuInstance) return appMenuInstance;
-  appMenuInstance = createAppMenu({
-    Menu, MenuItem, BrowserWindow, dialog, shell,
-    getAppConfig, getMainWindow: () => mainWindow,
-    appLabel: APP_LABEL,
-    openFindModal, initFindInPage,
-    reloadApp: reloadCopilot, clearAppCache: clearCopilotCache, clearCookiesAndSignOut,
-    copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
-    toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
-    getRuntimeInfo, appIconImage,
-    buildExportProfileMenuTemplate, promptExportWithProfile,
-    selectChatPane, promptSaveChatPane, saveSelectionAsMarkdown, EXPORT_SCOPES,
-    buildQuickChatManagerMenuTemplate, installQuickChatMenu, refreshQuickChatMenu,
-    createQuickChatWindow, buildSendToQuickSubmenu, SEND_MODE,
-    ensureSaveState,
-  });
-
-  return appMenuInstance;
-}
-
-function appendEditItems(...a) { return initAppMenu().appendEditItems(...a); }
-function appendHelpItems(...a) { return initAppMenu().appendHelpItems(...a); }
-function appendSessionItems(...a) { return initAppMenu().appendSessionItems(...a); }
-function augmentApplicationMenu(...a) { return initAppMenu().augmentApplicationMenu(...a); }
-function appendFileItems(...a) { return initAppMenu().appendFileItems(...a); }
-
-
-// ============================================================================
-
-
-
-
-
 function safeShowError(title, message) {
   try {
     dialog.showErrorBox(
@@ -389,13 +178,326 @@ function ensureDidStopLoadingHandler(webContents) {
   webContents.on('did-stop-loading', onDidStopLoading);
 }
 
+// ---------- Window-state module bridge ----------
+let windowStateInstance = null;
+function initWindowState() {
+  if (windowStateInstance) return windowStateInstance;
+  windowStateInstance = createWindowState({ app, path, fs, screen, getIsQuitting: () => isQuitting });
+  return windowStateInstance;
+}
+function attachWindowStatePersistence(...args) { return initWindowState().attachWindowStatePersistence(...args); }
+function getInitialWindowBounds(...args) { return initWindowState().getInitialWindowBounds(...args); }
+function scheduleSaveWindowState(...args) { return initWindowState().scheduleSaveWindowState(...args); }
+function loadWindowState(...args) { return initWindowState().loadWindowState(...args); }
+function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyDisplay(...args); }
+
+// ---------- Session-helpers module bridge ----------
+let sessionHelpersInstance = null;
+function initSessionHelpers() {
+  if (sessionHelpersInstance) return sessionHelpersInstance;
+
+  sessionHelpersInstance = createSessionHelpers({
+    app, BrowserWindow, dialog, shell,
+    session, clipboard, nativeImage,
+    fs, path, getAppConfig,
+    partition: APP_PARTITION,
+    appLabel: APP_LABEL,
+    getAppPartition: () => APP_PARTITION,
+    getAppUrl: () => APP_URL,
+    getConfigFilePath,
+    getLogFilePath,
+    getMainWindow: () => mainWindow,
+    safeShowError,
+
+    ensureConfigFile,
+    refreshQuickChatMenu, refreshTrayMenu,
+    getAppIconImage: () => appIconImage,
+  });
+
+  return sessionHelpersInstance;
+}
+function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
+function getCopilotSession() { return initSessionHelpers().getAppSession(); }
+function getActiveCopilotWindow() { return initSessionHelpers().getActiveAppWindow(); }
+function getActiveCopilotWebContents() { return initSessionHelpers().getActiveAppWebContents(); }
+function reloadCopilot(...a) { return initSessionHelpers().reloadApp(...a); }
+function clearCopilotCache() { return initSessionHelpers().clearAppCache(); }
+function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndSignOut(); }
+function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
+function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
+function getLogsFolderPath() { return initSessionHelpers().getLogsFolderPath(); }
+function openPathWithError(...a) { return initSessionHelpers().openPathWithError(...a); }
+function openLogsFolder() { return initSessionHelpers().openLogsFolder(); }
+function openConfigFile() { return initSessionHelpers().openConfigFile(); }
+function toggleActiveWindowAlwaysOnTop() { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(); }
+function showAboutDialog() { return initSessionHelpers().showAboutDialog(); }
+function showApplicationHelp() { return initSessionHelpers().showApplicationHelp(); }
+
+// ---------- Find-in-page module bridge ----------
+let findInPageInstance = null;
+function initFindInPage() {
+  if (findInPageInstance) return findInPageInstance;
+  findInPageInstance = createFindInPage({
+    BrowserWindow,
+    ipcMain,
+    screen,
+    getMainWindow: () => mainWindow,
+    getAppConfig,
+    enableFindContentVisibility,
+    disableFindContentVisibility,
+  });
+  return findInPageInstance;
+}
+function openFindModal(...args) { return initFindInPage().openFindModal(...args); }
+function attachFindResultForwarding(...args) { return initFindInPage().attachFindResultForwarding(...args); }
+function resetFindModalResults(...args) { return initFindInPage().resetFindModalResults(...args); }
+function sendFindModalResults(...args) { return initFindInPage().sendFindModalResults(...args); }
+function getWCFromEventSender(...args) { return initFindInPage().getWCFromEventSender(...args); }
+function getWC(...args) { return initFindInPage().getWC(...args); }
+function applyWordStartOptions(...args) { return initFindInPage().applyWordStartOptions(...args); }
+
+// ---------- Direct-open module bridge ----------
+let directOpenInstance = null;
+function initDirectOpen() {
+  if (directOpenInstance) return directOpenInstance;
+  directOpenInstance = createDirectOpen({
+    session, shell, fs, path, app, ipcMain,
+    getAppConfig,
+    getAppPartition: () => APP_PARTITION,
+    appSlug: APP_SLUG,
+    safeShowError,
+  });
+  return directOpenInstance;
+}
+function registerDirectOpenDownloadHandler() { return initDirectOpen().registerDirectOpenDownloadHandler(); }
+function pruneExpiredDirectOpenRequests() { return initDirectOpen().pruneExpiredDirectOpenRequests(); }
+function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
+
+function ensureSaveState(win) {
+  if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
+}
+
+async function executeInAllFrames(win, source) {
+  if (!win?.webContents) return [];
+  const results = [];
+
+  try {
+    const top = await win.webContents.executeJavaScript(source, true).catch(() => null);
+    if (top) results.push({ where: 'top', value: top });
+  } catch {}
+
+  const frames = win.webContents.mainFrame?.framesInSubtree ?? [];
+  for (const frame of frames) {
+    try {
+      const value = await frame.executeJavaScript(source, true).catch(() => null);
+      if (value) results.push({ where: `frame:${frame.routingId}`, value });
+    } catch {}
+  }
+
+  return results;
+}
+
+async function findBestChatRoot(...args) {
+  return initExporters().findBestChatRoot(...args);
+}
+
+async function getChatPaneSnapshot(...args) {
+  return initExporters().getChatPaneSnapshot(...args);
+}
+
+function buildLocateChatRootScript(options = {}) {
+  return buildChatPaneDetectionScript({
+    includeHtml: options.includeHtml !== false,
+    cleanupJunk: !!options.cleanupJunk,
+    selectContent: !!options.selectContent,
+    scrollIntoView: !!options.scrollIntoView,
+  });
+}
+
+// ---------- Chat pane selection helper ----------
+// Select the entire chat pane content in the renderer and return selection stats
+async function selectChatPane(win) {
+  const js = buildChatPaneDetectionScript({
+    selectContent: true,
+    scrollIntoView: true
+  });
+  const results = await executeInAllFrames(win, js);
+  const success = results
+  .map(r => r.value)
+  .filter(v => v?.ok)
+  .sort((a, b) => Number(b.selectedTextLength || 0) - Number(a.selectedTextLength || 0))[0];
+
+  return success || { ok: false, selectedTextLength: 0 }
+}
 
 
+// ---------- Exporter module bridge ----------
+let exportersInstance = null;
+function initExporters() {
+  if (exportersInstance) return exportersInstance;
+  exportersInstance = createExporters({
+    app,
+    BrowserWindow,
+    dialog,
+    safeShowError,
+    executeInAllFrames,
+    getAppPartition: () => APP_PARTITION,
+    buildLocateChatRootScript,
+    appSlug: APP_SLUG,
+    buildChatPaneDetectionScript,
+    cleanupDOMFragmentScript,
+    CHAT_SCOPE_PSEUDO,
+    EXPORT_ROOT_CLASS,
+    EXPORT_ROOT_SELECTOR,
+    getAppConfig,
+    DEFAULT_APP_CONFIG,
+    normalizeExportFormat,
+    appLabel: APP_LABEL,
+    appSlug: APP_SLUG,
+  });
+  return exportersInstance;
+}
+
+function htmlToMarkdown(...args) { return initExporters().htmlToMarkdown(...args); }
+function stripTags(...args) { return initExporters().stripTags(...args); }
+function decodeEntities(...args) { return initExporters().decodeEntities(...args); }
+function stripExecutableBlocks(...args) { return initExporters().stripExecutableBlocks(...args); }
+async function getSelectionFragment(...args) { return initExporters().getSelectionFragment(...args); }
+async function getSelectionFragmentRaw(...args) { return initExporters().getSelectionFragmentRaw(...args); }
+async function saveSelectionAsMarkdown(...args) { return initExporters().saveSelectionAsMarkdown(...args); }
+async function saveSelectionAsCleanMarkdown(...args) { return initExporters().saveSelectionAsCleanMarkdown(...args); }
+async function saveSelectionAsRawMarkdown(...args) { return initExporters().saveSelectionAsRawMarkdown(...args); }
+async function saveSelectionAsMarkdownWithMetadata(...args) { return initExporters().saveSelectionAsMarkdownWithMetadata(...args); }
+async function saveSelectionAsHTML(...args) { return initExporters().saveSelectionAsHTML(...args); }
+async function saveSelectionAsText(...args) { return initExporters().saveSelectionAsText(...args); }
+async function saveSelectionAsPDF(...args) { return initExporters().saveSelectionAsPDF(...args); }
+async function saveChatPaneByExtension(...args) { return initExporters().saveChatPaneByExtension(...args); }
+async function saveChatPaneByProfile(...args) { return initExporters().saveChatPaneByProfile(...args); }
+async function saveSelectionByProfile(...args) { return initExporters().saveSelectionByProfile(...args); }
+async function promptExportWithProfile(...args) { return initExporters().promptExportWithProfile(...args); }
+function buildExportProfileMenuTemplate(...args) { return initExporters().buildExportProfileMenuTemplate(...args); }
+async function promptSaveChatPane(...args) { return initExporters().promptSaveChatPane(...args); }
+async function saveChatPaneAsMarkdown(...args) { return initExporters().saveChatPaneAsMarkdown(...args); }
+async function saveChatPaneAsRawMarkdown(...args) { return initExporters().saveChatPaneAsRawMarkdown(...args); }
+async function saveChatPaneAsMarkdownWithMetadata(...args) { return initExporters().saveChatPaneAsMarkdownWithMetadata(...args); }
+async function getBestChatRootCleaned(...args) { return initExporters().getBestChatRootCleaned(...args); }
+async function saveChatPaneAsText(...args) { return initExporters().saveChatPaneAsText(...args); }
+function escapeHtmlForExport(...args) { return initExporters().escapeHtmlForExport(...args); }
+function buildPrintableChatPaneHtml(...args) { return initExporters().buildPrintableChatPaneHtml(...args); }
+async function writeHtmlDocumentToPDF(...args) { return initExporters().writeHtmlDocumentToPDF(...args); }
+async function saveChatPaneAsPDF(...args) { return initExporters().saveChatPaneAsPDF(...args); }
+async function saveAsDialog(...args) { return initExporters().saveAsDialog(...args); }
+
+// ---------- Context-menu module bridge ----------
+let contextMenuInstance = null;
+function initContextMenu() {
+  if (contextMenuInstance) return contextMenuInstance;
+  contextMenuInstance = createContextMenu({
+    Menu, MenuItem, clipboard, shell, BrowserWindow, dialog,
+    getAppConfig, SEND_MODE, EXPORT_SCOPES,
+    selectChatPane, promptSaveChatPane, getSelectionFragment,
+    htmlToMarkdown, buildSendToQuickSubmenu, createQuickChatWindow,
+    promptExportWithProfile, buildExportProfileMenuTemplate,
+    openFindModal, reveal, safeShowError, saveSelectionAsMarkdown,
+  });
+  return contextMenuInstance;
+}
+function buildContextMenuTemplate(...a) { return initContextMenu().buildContextMenuTemplate(...a); }
+
+// ---------- Quick Chat module bridge ----------
+let quickChatManager = null;
+function initQuickChat() {
+  if (quickChatManager) return quickChatManager;
+  quickChatManager = createQuickChatManager({
+    app,
+    BrowserWindow,
+    Menu,
+    MenuItem,
+    ipcMain,
+    dialog,
+    shell,
+    clipboard,
+    path,
+    dirname: __dirname,
+    getMainWindow: () => mainWindow,
+    getAppIconImage: () => appIconImage,
+    getAppConfig,
+    DEFAULT_APP_CONFIG,
+    getAppUrl: () => APP_URL,
+    appLabel: APP_LABEL,
+    appSlug: APP_SLUG,
+    getAppPartition: () => APP_PARTITION,
+    SEND_MODE,
+    IPC,
+    reveal,
+    safeShowError,
+    getInitialWindowBounds,
+    attachWindowStatePersistence,
+    attachCSSAndLayoutHandlers,
+    attachFindResultForwarding,
+    ensureDidStopLoadingHandler,
+    onDidStopLoading,
+    buildContextMenuTemplate,
+    getSelectionFragment,
+    htmlToMarkdown,
+    refreshTrayMenu,
+  });
+  quickChatManager.registerIpcHandlers();
+  return quickChatManager;
+}
+
+function normalizeSendOptions(...args) { return initQuickChat().normalizeSendOptions(...args); }
+function quoteify(...args) { return initQuickChat().quoteify(...args); }
+function getQuickDisplayName(...args) { return initQuickChat().getQuickDisplayName(...args); }
+function updateQuickWindowTitle(...args) { return initQuickChat().updateQuickWindowTitle(...args); }
+function setRoleTitle(...args) { return initQuickChat().setRoleTitle(...args); }
+function closeQuickChatWindow(...args) { return initQuickChat().closeQuickChatWindow(...args); }
+function closeAllQuickChatWindows(...args) { return initQuickChat().closeAllQuickChatWindows(...args); }
+function getQuickById(...args) { return initQuickChat().getQuickById(...args); }
+function listQuickIds(...args) { return initQuickChat().listQuickIds(...args); }
+function getActiveQuickChatWindow(...args) { return initQuickChat().getActiveQuickChatWindow(...args); }
+function getTargetQuickWindow(...args) { return initQuickChat().getTargetQuickWindow(...args); }
+function buildQuickChatManagerMenuTemplate(...args) { return initQuickChat().buildQuickChatManagerMenuTemplate(...args); }
+function installQuickChatMenu(...args) { return initQuickChat().installQuickChatMenu(...args); }
+function refreshQuickChatMenu(...args) { return initQuickChat().refreshQuickChatMenu(...args); }
+function scheduleQuickPaste(...args) { return initQuickChat().scheduleQuickPaste(...args); }
+function createQuickChatWindow(...args) { return initQuickChat().createQuickChatWindow(...args); }
+async function sendSelectionToQuick(...args) { return initQuickChat().sendSelectionToQuick(...args); }
+async function sendSelectionToSpecificQuickViaDialog(...args) { return initQuickChat().sendSelectionToSpecificQuickViaDialog(...args); }
+function buildSendToQuickSubmenu(...args) { return initQuickChat().buildSendToQuickSubmenu(...args); }
+
+// ---------- App-menu module bridge ----------
+let appMenuInstance = null;
+
+function initAppMenu() {
+  if (appMenuInstance) return appMenuInstance;
+  appMenuInstance = createAppMenu({
+    Menu, MenuItem, BrowserWindow, dialog, shell,
+    getAppConfig, getMainWindow: () => mainWindow,
+    appLabel: APP_LABEL,
+    openFindModal, initFindInPage,
+    reloadApp: reloadCopilot, clearAppCache: clearCopilotCache, clearCookiesAndSignOut,
+    copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
+    toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
+    getRuntimeInfo, appIconImage,
+    buildExportProfileMenuTemplate, promptExportWithProfile,
+    selectChatPane, promptSaveChatPane, saveSelectionAsMarkdown, EXPORT_SCOPES,
+    buildQuickChatManagerMenuTemplate, installQuickChatMenu, refreshQuickChatMenu,
+    createQuickChatWindow, buildSendToQuickSubmenu, SEND_MODE,
+    ensureSaveState,
+  });
+
+  return appMenuInstance;
+}
+
+function appendEditItems(...a) { return initAppMenu().appendEditItems(...a); }
+function appendHelpItems(...a) { return initAppMenu().appendHelpItems(...a); }
+function appendSessionItems(...a) { return initAppMenu().appendSessionItems(...a); }
+function augmentApplicationMenu(...a) { return initAppMenu().augmentApplicationMenu(...a); }
+function appendFileItems(...a) { return initAppMenu().appendFileItems(...a); }
 
 
-
-
-
+// ============================================================================
 
 function buildTrayMenuTemplate() {
   const activeWindow = getActiveCopilotWindow();
@@ -517,121 +619,6 @@ function refreshTrayMenu() {
 
 app.setName(appConfig.appName);
 app.setAppUserModelId(appConfig.appUserModelId);
-
-function ensureSaveState(win) {
-  if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
-}
-
-async function executeInAllFrames(win, source) {
-  if (!win?.webContents) return [];
-  const results = [];
-
-  try {
-    const top = await win.webContents.executeJavaScript(source, true).catch(() => null);
-    if (top) results.push({ where: 'top', value: top });
-  } catch {}
-
-  const frames = win.webContents.mainFrame?.framesInSubtree ?? [];
-  for (const frame of frames) {
-    try {
-      const value = await frame.executeJavaScript(source, true).catch(() => null);
-      if (value) results.push({ where: `frame:${frame.routingId}`, value });
-    } catch {}
-  }
-
-  return results;
-}
-
-async function findBestChatRoot(...args) {
-  return initExporters().findBestChatRoot(...args);
-}
-
-async function getChatPaneSnapshot(...args) {
-  return initExporters().getChatPaneSnapshot(...args);
-}
-
-function buildLocateChatRootScript(options = {}) {
-  return buildChatPaneDetectionScript({
-    includeHtml: options.includeHtml !== false,
-    cleanupJunk: !!options.cleanupJunk,
-    selectContent: !!options.selectContent,
-    scrollIntoView: !!options.scrollIntoView,
-  });
-}
-
-// ---------- Chat pane selection helper ----------
-// Select the entire chat pane content in the renderer and return selection stats
-async function selectChatPane(win) {
-  const js = buildChatPaneDetectionScript({
-    selectContent: true,
-    scrollIntoView: true
-  });
-  const results = await executeInAllFrames(win, js);
-  const success = results
-  .map(r => r.value)
-  .filter(v => v?.ok)
-  .sort((a, b) => Number(b.selectedTextLength || 0) - Number(a.selectedTextLength || 0))[0];
-
-  return success || { ok: false, selectedTextLength: 0 }
-}
-
-
-// ---------- Exporter module bridge ----------
-let exportersInstance = null;
-function initExporters() {
-  if (exportersInstance) return exportersInstance;
-  exportersInstance = createExporters({
-    app,
-    BrowserWindow,
-    dialog,
-    safeShowError,
-    executeInAllFrames,
-    getAppPartition: () => APP_PARTITION,
-    buildLocateChatRootScript,
-    appSlug: APP_SLUG,
-    buildChatPaneDetectionScript,
-    cleanupDOMFragmentScript,
-    CHAT_SCOPE_PSEUDO,
-    EXPORT_ROOT_CLASS,
-    EXPORT_ROOT_SELECTOR,
-    getAppConfig,
-    DEFAULT_APP_CONFIG,
-    normalizeExportFormat,
-    appLabel: APP_LABEL,
-    appSlug: APP_SLUG,
-  });
-  return exportersInstance;
-}
-
-function htmlToMarkdown(...args) { return initExporters().htmlToMarkdown(...args); }
-function stripTags(...args) { return initExporters().stripTags(...args); }
-function decodeEntities(...args) { return initExporters().decodeEntities(...args); }
-function stripExecutableBlocks(...args) { return initExporters().stripExecutableBlocks(...args); }
-async function getSelectionFragment(...args) { return initExporters().getSelectionFragment(...args); }
-async function getSelectionFragmentRaw(...args) { return initExporters().getSelectionFragmentRaw(...args); }
-async function saveSelectionAsMarkdown(...args) { return initExporters().saveSelectionAsMarkdown(...args); }
-async function saveSelectionAsCleanMarkdown(...args) { return initExporters().saveSelectionAsCleanMarkdown(...args); }
-async function saveSelectionAsRawMarkdown(...args) { return initExporters().saveSelectionAsRawMarkdown(...args); }
-async function saveSelectionAsMarkdownWithMetadata(...args) { return initExporters().saveSelectionAsMarkdownWithMetadata(...args); }
-async function saveSelectionAsHTML(...args) { return initExporters().saveSelectionAsHTML(...args); }
-async function saveSelectionAsText(...args) { return initExporters().saveSelectionAsText(...args); }
-async function saveSelectionAsPDF(...args) { return initExporters().saveSelectionAsPDF(...args); }
-async function saveChatPaneByExtension(...args) { return initExporters().saveChatPaneByExtension(...args); }
-async function saveChatPaneByProfile(...args) { return initExporters().saveChatPaneByProfile(...args); }
-async function saveSelectionByProfile(...args) { return initExporters().saveSelectionByProfile(...args); }
-async function promptExportWithProfile(...args) { return initExporters().promptExportWithProfile(...args); }
-function buildExportProfileMenuTemplate(...args) { return initExporters().buildExportProfileMenuTemplate(...args); }
-async function promptSaveChatPane(...args) { return initExporters().promptSaveChatPane(...args); }
-async function saveChatPaneAsMarkdown(...args) { return initExporters().saveChatPaneAsMarkdown(...args); }
-async function saveChatPaneAsRawMarkdown(...args) { return initExporters().saveChatPaneAsRawMarkdown(...args); }
-async function saveChatPaneAsMarkdownWithMetadata(...args) { return initExporters().saveChatPaneAsMarkdownWithMetadata(...args); }
-async function getBestChatRootCleaned(...args) { return initExporters().getBestChatRootCleaned(...args); }
-async function saveChatPaneAsText(...args) { return initExporters().saveChatPaneAsText(...args); }
-function escapeHtmlForExport(...args) { return initExporters().escapeHtmlForExport(...args); }
-function buildPrintableChatPaneHtml(...args) { return initExporters().buildPrintableChatPaneHtml(...args); }
-async function writeHtmlDocumentToPDF(...args) { return initExporters().writeHtmlDocumentToPDF(...args); }
-async function saveChatPaneAsPDF(...args) { return initExporters().saveChatPaneAsPDF(...args); }
-async function saveAsDialog(...args) { return initExporters().saveAsDialog(...args); }
 
 // ============================================================================
 // Structured selection -> envelope -> quick chat inject (active OR specific #N)
@@ -922,4 +909,3 @@ app.on('before-quit', () => {
     try { initDirectOpen().cleanupTempFiles(); } catch {}
   } catch {}
 });
-
