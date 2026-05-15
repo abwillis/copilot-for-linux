@@ -216,23 +216,22 @@ function initSessionHelpers() {
 
   return sessionHelpersInstance;
 }
-function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
+function getRuntimeInfo(...args) { return initSessionHelpers().getRuntimeInfo(...args); }
 function getAppSession(...args) { return initSessionHelpers().getAppSession(...args); }
 function getActiveAppWindow(...args) { return initSessionHelpers().getActiveAppWindow(...args); }
 function getActiveAppWebContents(...args) { return initSessionHelpers().getActiveAppWebContents(...args); }
 function reloadApp(...args) { return initSessionHelpers().reloadApp(...args); }
 function clearAppCache(...args) { return initSessionHelpers().clearAppCache(...args); }
-function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndSignOut(); }
-function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
-function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
-function getLogsFolderPath() { return initSessionHelpers().getLogsFolderPath(); }
+function clearCookiesAndSignOut(...args) { return initSessionHelpers().clearCookiesAndSignOut(...args); }
+function copyCurrentUrl(...args) { return initSessionHelpers().copyCurrentUrl(...args); }
+function openCurrentUrlExternal(...args) { return initSessionHelpers().openCurrentUrlExternal(...args); }
+function getLogsFolderPath(...args) { return initSessionHelpers().getLogsFolderPath(...args); }
 function openPathWithError(...args) { return initSessionHelpers().openPathWithError(...args); }
-function openLogsFolder() { return initSessionHelpers().openLogsFolder(); }
-function openConfigFile() { return initSessionHelpers().openConfigFile(); }
-function toggleActiveWindowAlwaysOnTop() { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(); }
-function showAboutDialog() { return initSessionHelpers().showAboutDialog(); }
-function showApplicationHelp() { return initSessionHelpers().showApplicationHelp(); }
-
+function openLogsFolder(...args) { return initSessionHelpers().openLogsFolder(...args); }
+function openConfigFile(...args) { return initSessionHelpers().openConfigFile(...args); }
+function toggleActiveWindowAlwaysOnTop(...args) { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(...args); }
+function showAboutDialog(...args) { return initSessionHelpers().showAboutDialog(...args); }
+function showApplicationHelp(...args) { return initSessionHelpers().showApplicationHelp(...args); }
 // ---------- Find-in-page module bridge ----------
 let findInPageInstance = null;
 function initFindInPage() {
@@ -269,8 +268,8 @@ function initDirectOpen() {
   });
   return directOpenInstance;
 }
-function registerDirectOpenDownloadHandler() { return initDirectOpen().registerDirectOpenDownloadHandler(); }
-function pruneExpiredDirectOpenRequests() { return initDirectOpen().pruneExpiredDirectOpenRequests(); }
+function registerDirectOpenDownloadHandler(...args) { return initDirectOpen().registerDirectOpenDownloadHandler(...args); }
+function pruneExpiredDirectOpenRequests(...args) { return initDirectOpen().pruneExpiredDirectOpenRequests(...args); }
 function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
 
 function ensureSaveState(win) {
