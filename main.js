@@ -19,6 +19,7 @@ const { createContextMenu } = require('./lib/context-menu');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createAppMenu } = require('./lib/app-menu');
 const { createTrayMenu } = require('./lib/tray-menu');
+const { createWindowHelpers } = require('./lib/window-helpers');
 const { createIconHelpers } = require('./lib/icon-helpers');
 
 // === App-specific modules ===
@@ -110,24 +111,19 @@ let lastSavePath = null;  // (legacy) Remember where "Save" last wrote to (per s
 // Utility
 // ============================================================================
 // Unified reveal helper to avoid repeated show/focus chains
-function reveal(win) {
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  if (!win.isVisible()) win.show();
-  win.focus();
-  try { win.moveTop(); } catch {}
+let windowHelpersInstance = null;
+function initWindowHelpers() {
+  if (windowHelpersInstance) return windowHelpersInstance;
+  windowHelpersInstance = createWindowHelpers({
+    dialog,
+    getAppConfig,
+    applyMaxLayoutCSS,
+    attachVWResize,
+  });
+  return windowHelpersInstance;
 }
-
-function safeShowError(title, message) {
-  try {
-    dialog.showErrorBox(
-      String(title ?? 'Error'),
-                        String(message ?? 'An error occurred')
-    );
-  } catch (err) {
-    console.error('Could not show error dialog:', err);
-  }
-}
+function reveal(...args) { return initWindowHelpers().reveal(...args); }
+function safeShowError(...args) { return initWindowHelpers().safeShowError(...args); }
 
 // ---------- Window-state module bridge ----------
 let windowStateInstance = null;
@@ -144,56 +140,12 @@ function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyD
 
 // === Safe 'did-stop-loading' wiring =========================================
 // A named handler so removeListener(...) can reliably detach the same function.
-function onDidStopLoading() {
-  try {
-    // Place your post-load logic here (keep it lightweight or idempotent).
-    // Example: enforceNoHScroll(BrowserWindow.getFocusedWindow() || mainWindow);
-  } catch (err) {
-    console.error('did-stop-loading handler error:', err);
-  }
-}
-
-
-// Attach the handler exactly once per webContents.
-function ensureDidStopLoadingHandler(webContents) {
-  if (!webContents) return;
-
-  // Guard against duplicate attachment across SPA navigations
-  if (webContents.__hasDidStopLoadingHandler) return;
-
-  webContents.__hasDidStopLoadingHandler = true;
-  webContents.on('did-stop-loading', onDidStopLoading);
-}
-
-// ============================================================================
-// CSS & layout attachment helper
-// ============================================================================
-function attachCSSAndLayoutHandlers(win, { role = 'window', revealOnReady = true } = {}) {
-  if (!win?.webContents) return;
-
-  ensureDidStopLoadingHandler(win.webContents);
-  if (!APP_CONFIG.enableLayoutCss) {
-    win.once('ready-to-show', () => {
-      if (revealOnReady) reveal(win);
-    });
-      return;
-  }
-
-  try {
-    win.webContents.once('did-stop-loading', () => {
-      setTimeout(() => {
-        try { applyMaxLayoutCSS(win); }
-        catch (e) { console.error(`applyMaxLayoutCSS (${role}) failed:`, e); }
-      }, 0);
-    });
-  } catch (e) {
-    console.error(`applyMaxLayoutCSS ${role} defer wiring failed:`, e);
-  }
-
-  win.once('ready-to-show', () => {
-    if (revealOnReady) reveal(win);
-    try { attachVWResize(win); }
-    catch (e) { console.error(`attachVWResize (${role}) failed:`, e); }
+function onDidStopLoading(...args) { return initWindowHelpers().onDidStopLoading(...args); }
+function ensureDidStopLoadingHandler(webContents) { return initWindowHelpers().ensureDidStopLoadingHandler(webContents, onDidStopLoading); }
+function attachCSSAndLayoutHandlers(win, options = {}) {
+  return initWindowHelpers().attachCSSAndLayoutHandlers(win, {
+    ...options,
+    didStopLoadingHandler: onDidStopLoading,
   });
 }
 
@@ -278,25 +230,6 @@ function registerDirectOpenDownloadHandler(...args) { return initDirectOpen().re
 function pruneExpiredDirectOpenRequests(...args) { return initDirectOpen().pruneExpiredDirectOpenRequests(...args); }
 function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
 
-async function executeInAllFrames(win, source) {
-  if (!win?.webContents) return [];
-  const results = [];
-
-  try {
-    const top = await win.webContents.executeJavaScript(source, true).catch(() => null);
-    if (top) results.push({ where: 'top', value: top });
-  } catch {}
-
-  const frames = win.webContents.mainFrame?.framesInSubtree ?? [];
-  for (const frame of frames) {
-    try {
-      const value = await frame.executeJavaScript(source, true).catch(() => null);
-      if (value) results.push({ where: `frame:${frame.routingId}`, value });
-    } catch {}
-  }
-
-  return results;
-}
 
 
 
@@ -309,7 +242,6 @@ function initExporters() {
     BrowserWindow,
     dialog,
     safeShowError,
-    executeInAllFrames,
     getAppPartition: () => APP_PARTITION,
     buildLocateChatRootScript,
     appSlug: APP_SLUG,
@@ -437,9 +369,7 @@ function createQuickChatWindow(...args) { return initQuickChat().createQuickChat
 async function sendSelectionToQuick(...args) { return initQuickChat().sendSelectionToQuick(...args); }
 async function sendSelectionToSpecificQuickViaDialog(...args) { return initQuickChat().sendSelectionToSpecificQuickViaDialog(...args); }
 function buildSendToQuickSubmenu(...args) { return initQuickChat().buildSendToQuickSubmenu(...args); }
-function ensureSaveState(win) {
-  if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
-}
+function ensureSaveState(...args) { return initWindowHelpers().ensureSaveState(...args); }
 
 
 
