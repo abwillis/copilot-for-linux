@@ -39,17 +39,25 @@ const {
   buildFindContentVisibilityCSS, enableFindContentVisibility, disableFindContentVisibility,
 } = require('./lib/layout-css');
 // ============================================================================
-// User preferences/config under app.getPath('userData')
+// App identity & constants
 // ============================================================================
-const DEFAULT_APP_CONFIG = Object.freeze({ ...appConfig.defaultAppConfig });
-
-let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
-let APP_PARTITION = DEFAULT_APP_CONFIG.partition;
-let APP_URL = DEFAULT_APP_CONFIG.appUrl;
-
-// --- App identity constants (used by all library modules) -------------------
 const APP_LABEL = appConfig.appLabel;
 const APP_SLUG  = appConfig.appSlug;
+
+const IPC = createIPC(APP_SLUG);
+
+const SEND_MODE = Object.freeze({
+  PLAIN: 'plain',
+  QUOTE: 'quote',
+});
+const LAYOUT_OBSERVER_GLOBAL = appConfig.layoutObserverGlobal;
+
+const DEFAULT_APP_CONFIG = Object.freeze({ ...appConfig.defaultAppConfig });
+
+let APP_URL = DEFAULT_APP_CONFIG.appUrl;
+let APP_PARTITION = DEFAULT_APP_CONFIG.partition;
+
+let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
 
 // ============================================================================
 // Runtime config/logging
@@ -86,27 +94,19 @@ const {
   getAppConfig,
 } = runtimeConfig;
 
+// ============================================================================
+// State
+// ============================================================================
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
-let lastSavePath = null;  // (legacy) Remember where "Save" last wrote to (per session/window)
 let appIconImage = null;  // Cached icon images
 let trayImage24 = null;  // Cached icon images
+let lastSavePath = null;  // (legacy) Remember where "Save" last wrote to (per session/window)
 
-// --- Clipboard-based Quick Chat paste timing ---------------------------------
-// Requirement: copy selection -> open/focus Quick Chat -> wait 3s -> paste.
-
-
-// --- Quick Chat / IPC constants --------------------------------------------
-// APP_URL is loaded from config.json under userData.
-const IPC = createIPC(APP_SLUG);
-
-const SEND_MODE = Object.freeze({
-  PLAIN: 'plain',
-  QUOTE: 'quote',
-});
-const LAYOUT_OBSERVER_GLOBAL = appConfig.layoutObserverGlobal;
-
+// ============================================================================
+// Utility
+// ============================================================================
 // Unified reveal helper to avoid repeated show/focus chains
 function reveal(win) {
   if (!win) return;
@@ -127,8 +127,45 @@ function safeShowError(title, message) {
   }
 }
 
+// ---------- Window-state module bridge ----------
+let windowStateInstance = null;
+function initWindowState() {
+  if (windowStateInstance) return windowStateInstance;
+  windowStateInstance = createWindowState({ app, path, fs, screen, getIsQuitting: () => isQuitting });
+  return windowStateInstance;
+}
+function attachWindowStatePersistence(...args) { return initWindowState().attachWindowStatePersistence(...args); }
+function getInitialWindowBounds(...args) { return initWindowState().getInitialWindowBounds(...args); }
+function scheduleSaveWindowState(...args) { return initWindowState().scheduleSaveWindowState(...args); }
+function loadWindowState(...args) { return initWindowState().loadWindowState(...args); }
+function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyDisplay(...args); }
+
+// === Safe 'did-stop-loading' wiring =========================================
+// A named handler so removeListener(...) can reliably detach the same function.
+function onDidStopLoading() {
+  try {
+    // Place your post-load logic here (keep it lightweight or idempotent).
+    // Example: enforceNoHScroll(BrowserWindow.getFocusedWindow() || mainWindow);
+  } catch (err) {
+    console.error('did-stop-loading handler error:', err);
+  }
+}
 
 
+// Attach the handler exactly once per webContents.
+function ensureDidStopLoadingHandler(webContents) {
+  if (!webContents) return;
+
+  // Guard against duplicate attachment across SPA navigations
+  if (webContents.__hasDidStopLoadingHandler) return;
+
+  webContents.__hasDidStopLoadingHandler = true;
+  webContents.on('did-stop-loading', onDidStopLoading);
+}
+
+// ============================================================================
+// CSS & layout attachment helper
+// ============================================================================
 function attachCSSAndLayoutHandlers(win, { role = 'window', revealOnReady = true } = {}) {
   if (!win?.webContents) return;
 
@@ -157,42 +194,6 @@ function attachCSSAndLayoutHandlers(win, { role = 'window', revealOnReady = true
     catch (e) { console.error(`attachVWResize (${role}) failed:`, e); }
   });
 }
-
-
-// === Safe 'did-stop-loading' wiring =========================================
-// A named handler so removeListener(...) can reliably detach the same function.
-function onDidStopLoading() {
-  try {
-    // Place your post-load logic here (keep it lightweight or idempotent).
-    // Example: enforceNoHScroll(BrowserWindow.getFocusedWindow() || mainWindow);
-  } catch (err) {
-    console.error('did-stop-loading handler error:', err);
-  }
-}
-
-// Attach the handler exactly once per webContents.
-function ensureDidStopLoadingHandler(webContents) {
-  if (!webContents) return;
-
-  // Guard against duplicate attachment across SPA navigations
-  if (webContents.__hasDidStopLoadingHandler) return;
-
-  webContents.__hasDidStopLoadingHandler = true;
-  webContents.on('did-stop-loading', onDidStopLoading);
-}
-
-// ---------- Window-state module bridge ----------
-let windowStateInstance = null;
-function initWindowState() {
-  if (windowStateInstance) return windowStateInstance;
-  windowStateInstance = createWindowState({ app, path, fs, screen, getIsQuitting: () => isQuitting });
-  return windowStateInstance;
-}
-function attachWindowStatePersistence(...args) { return initWindowState().attachWindowStatePersistence(...args); }
-function getInitialWindowBounds(...args) { return initWindowState().getInitialWindowBounds(...args); }
-function scheduleSaveWindowState(...args) { return initWindowState().scheduleSaveWindowState(...args); }
-function loadWindowState(...args) { return initWindowState().loadWindowState(...args); }
-function isBoundsOnAnyDisplay(...args) { return initWindowState().isBoundsOnAnyDisplay(...args); }
 
 // ---------- Session-helpers module bridge ----------
 let sessionHelpersInstance = null;
@@ -234,6 +235,7 @@ function openConfigFile(...args) { return initSessionHelpers().openConfigFile(..
 function toggleActiveWindowAlwaysOnTop(...args) { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(...args); }
 function showAboutDialog(...args) { return initSessionHelpers().showAboutDialog(...args); }
 function showApplicationHelp(...args) { return initSessionHelpers().showApplicationHelp(...args); }
+
 // ---------- Find-in-page module bridge ----------
 let findInPageInstance = null;
 function initFindInPage() {
@@ -274,10 +276,6 @@ function registerDirectOpenDownloadHandler(...args) { return initDirectOpen().re
 function pruneExpiredDirectOpenRequests(...args) { return initDirectOpen().pruneExpiredDirectOpenRequests(...args); }
 function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
 
-function ensureSaveState(win) {
-  if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
-}
-
 async function executeInAllFrames(win, source) {
   if (!win?.webContents) return [];
   const results = [];
@@ -298,22 +296,6 @@ async function executeInAllFrames(win, source) {
   return results;
 }
 
-
-// ---------- Chat pane selection helper ----------
-// Select the entire chat pane content in the renderer and return selection stats
-async function selectChatPane(win) {
-  const js = buildChatPaneDetectionScript({
-    selectContent: true,
-    scrollIntoView: true
-  });
-  const results = await executeInAllFrames(win, js);
-  const success = results
-  .map(r => r.value)
-  .filter(v => v?.ok)
-  .sort((a, b) => Number(b.selectedTextLength || 0) - Number(a.selectedTextLength || 0))[0];
-
-  return success || { ok: false, selectedTextLength: 0 }
-}
 
 
 // ---------- Exporter module bridge ----------
@@ -351,6 +333,7 @@ function stripExecutableBlocks(...args) { return initExporters().stripExecutable
 async function getSelectionFragment(...args) { return initExporters().getSelectionFragment(...args); }
 async function getSelectionFragmentRaw(...args) { return initExporters().getSelectionFragmentRaw(...args); }
 async function buildSelectionMarkdownForExport(...args) { return initExporters().buildSelectionMarkdownForExport(...args); }
+async function selectChatPane(...args) { return initExporters().selectChatPane(...args); }
 async function promptSaveChatPane(...args) { return initExporters().promptSaveChatPane(...args); }
 async function saveSelectionAsMarkdown(...args) { return initExporters().saveSelectionAsMarkdown(...args); }
 async function saveSelectionAsCleanMarkdown(...args) { return initExporters().saveSelectionAsCleanMarkdown(...args); }
@@ -452,6 +435,11 @@ function createQuickChatWindow(...args) { return initQuickChat().createQuickChat
 async function sendSelectionToQuick(...args) { return initQuickChat().sendSelectionToQuick(...args); }
 async function sendSelectionToSpecificQuickViaDialog(...args) { return initQuickChat().sendSelectionToSpecificQuickViaDialog(...args); }
 function buildSendToQuickSubmenu(...args) { return initQuickChat().buildSendToQuickSubmenu(...args); }
+function ensureSaveState(win) {
+  if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
+}
+
+
 
 // ---------- App-menu module bridge ----------
 let appMenuInstance = null;
@@ -613,6 +601,28 @@ app.setAppUserModelId(appConfig.appUserModelId);
 
   initDirectOpen().registerDirectOpenIpcHandler(IPC);
 
+
+function getIconPath(filename) {
+  // Handle both development and packaged environments
+  //  const basePath = __dirname;
+  const basePath = app.getAppPath();
+  const iconPath = path.join(basePath, 'assets', filename);
+
+  // For packaged apps, try the asar-unpacked path first
+  if (app.isPackaged) {
+    const asarPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', filename);
+    if (require('fs').existsSync(asarPath)) {
+
+      //      console.log('Icon path resolved:', asarPath); // Echo to terminal
+
+      return asarPath;
+    }
+  }
+
+  //      console.log('Icon path resolved:', iconPath); // Echo to terminal
+  return iconPath;
+}
+
 function createWindow() {
   // Clean up any existing window first
   if (mainWindow) return; // do not destroy/recreate unless needed
@@ -765,28 +775,6 @@ function createWindow() {
     mainWindow = null;
   });
 }
-
-function getIconPath(filename) {
-  // Handle both development and packaged environments
-  //  const basePath = __dirname;
-  const basePath = app.getAppPath();
-  const iconPath = path.join(basePath, 'assets', filename);
-
-  // For packaged apps, try the asar-unpacked path first
-  if (app.isPackaged) {
-    const asarPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', filename);
-    if (require('fs').existsSync(asarPath)) {
-
-      //      console.log('Icon path resolved:', asarPath); // Echo to terminal
-
-      return asarPath;
-    }
-  }
-
-  //      console.log('Icon path resolved:', iconPath); // Echo to terminal
-  return iconPath;
-}
-
 function createTray() {
   // Use a 24x24 or 32x32 PNG for Cinnamon panel
   const iconPath = getIconPath(appConfig.iconFileName);
