@@ -1,21 +1,25 @@
 // main.js
+'use strict';
+
 const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+const appConfig = require('./app.config');
 const { createIPC } = require('./lib/ipc');
 const { createRuntimeConfig } = require('./lib/runtime-config');
-const appConfig = require('./app.config');
-const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
-const { createQuickChatManager } = require('./lib/quick-chat');
-const { createFindInPage } = require('./lib/find-in-page');
-const { createDirectOpen } = require('./lib/direct-open');
+
+// === Shared modules ===
 const { createWindowState } = require('./lib/window-state');
 const { createSessionHelpers } = require('./lib/session-helpers');
+const { createFindInPage } = require('./lib/find-in-page');
+const { createDirectOpen } = require('./lib/direct-open');
+const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
 const { createContextMenu } = require('./lib/context-menu');
+const { createQuickChatManager } = require('./lib/quick-chat');
 const { createAppMenu } = require('./lib/app-menu');
 
-// === Extracted DOM + layout helpers (Tier 3 refactor) ===
+// === App-specific modules ===
 const {
   CHAT_ROOT_SELECTORS, CHAT_MESSAGE_LIST_SELECTORS,
   CHAT_SCOPE_SELECTOR, CHAT_SCOPE_PSEUDO,
@@ -33,8 +37,6 @@ const {
   injectCSSOnLoad, injectCSSIntoAllFrames, applyMaxLayoutCSS, requestExpandedLayout,
   buildFindContentVisibilityCSS, enableFindContentVisibility, disableFindContentVisibility,
 } = require('./lib/layout-css');
-
-
 // ============================================================================
 // User preferences/config under app.getPath('userData')
 // ============================================================================
