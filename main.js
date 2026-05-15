@@ -226,7 +226,7 @@ function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndS
 function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
 function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
 function getLogsFolderPath() { return initSessionHelpers().getLogsFolderPath(); }
-function openPathWithError(...a) { return initSessionHelpers().openPathWithError(...a); }
+function openPathWithError(...args) { return initSessionHelpers().openPathWithError(...args); }
 function openLogsFolder() { return initSessionHelpers().openLogsFolder(); }
 function openConfigFile() { return initSessionHelpers().openConfigFile(); }
 function toggleActiveWindowAlwaysOnTop() { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(); }
@@ -402,7 +402,7 @@ function initContextMenu() {
   });
   return contextMenuInstance;
 }
-function buildContextMenuTemplate(...a) { return initContextMenu().buildContextMenuTemplate(...a); }
+function buildContextMenuTemplate(...args) { return initContextMenu().buildContextMenuTemplate(...args); }
 
 // ---------- Quick Chat module bridge ----------
 let quickChatManager = null;
@@ -490,11 +490,11 @@ function initAppMenu() {
   return appMenuInstance;
 }
 
-function appendEditItems(...a) { return initAppMenu().appendEditItems(...a); }
-function appendHelpItems(...a) { return initAppMenu().appendHelpItems(...a); }
-function appendSessionItems(...a) { return initAppMenu().appendSessionItems(...a); }
-function augmentApplicationMenu(...a) { return initAppMenu().augmentApplicationMenu(...a); }
-function appendFileItems(...a) { return initAppMenu().appendFileItems(...a); }
+function appendEditItems(...args) { return initAppMenu().appendEditItems(...args); }
+function appendHelpItems(...args) { return initAppMenu().appendHelpItems(...args); }
+function appendSessionItems(...args) { return initAppMenu().appendSessionItems(...args); }
+function augmentApplicationMenu(...args) { return initAppMenu().augmentApplicationMenu(...args); }
+function appendFileItems(...args) { return initAppMenu().appendFileItems(...args); }
 
 
 // ============================================================================
