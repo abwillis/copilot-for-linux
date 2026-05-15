@@ -5,6 +5,7 @@ const fs = require('fs');
 
 const { createIPC } = require('./lib/ipc');
 const { createRuntimeConfig } = require('./lib/runtime-config');
+const appConfig = require('./app.config');
 const { createExporters, EXPORT_SCOPES } = require('./lib/exporters');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createFindInPage } = require('./lib/find-in-page');
@@ -37,30 +38,15 @@ const {
 // ============================================================================
 // User preferences/config under app.getPath('userData')
 // ============================================================================
-const DEFAULT_APP_CONFIG = Object.freeze({
-  appUrl: 'https://m365.cloud.microsoft/chat',
-  partition: String(process.env.COPILOT_PARTITION ?? 'persist:copilot-for-linux').trim(),
-  enableLayoutCss: true,
-  enableDirectOpen: true,
-  enableQuickChat: true,
-  defaultExportFormat: 'md',
-  defaultPaneExportProfile: 'cleanMarkdown',
-  defaultSelectionExportProfile: 'cleanMarkdown',
-  quickPasteDelayMs: 3000,
-  findContentVisibilityOverride: true,
-  devToolsEnabled: true,
-  enableConsoleLogging: true,
-  enableFileLogging: true,
-  logFileName: 'copilot-for-linux.log'
-});
+const DEFAULT_APP_CONFIG = Object.freeze({ ...appConfig.defaultAppConfig });
 
 let APP_CONFIG = { ...DEFAULT_APP_CONFIG };
-let COPILOT_PARTITION = DEFAULT_APP_CONFIG.partition;
-let COPILOT_URL = DEFAULT_APP_CONFIG.appUrl;
+let APP_PARTITION = DEFAULT_APP_CONFIG.partition;
+let APP_URL = DEFAULT_APP_CONFIG.appUr
 
 // --- App identity constants (used by all library modules) -------------------
-const APP_LABEL = 'Copilot';
-const APP_SLUG  = 'copilot';
+const APP_LABEL = appConfig.appLabel;
+const APP_SLUG  = appConfig.appSlug;
 
 // ============================================================================
 // Runtime config/logging
@@ -70,11 +56,11 @@ const runtimeConfig = createRuntimeConfig({
   fs,
   path,
   defaultAppConfig: DEFAULT_APP_CONFIG,
-  partitionEnvVar: 'COPILOT_PARTITION',
+  partitionEnvVar: appConfig.partitionEnvVar,
   onConfigLoaded(config) {
     APP_CONFIG = config;
-    COPILOT_PARTITION = config.partition;
-    COPILOT_URL = config.appUrl;
+    APP_PARTITION = config.partition;
+    APP_URL = config.appUrl;
   },
 });
 
@@ -116,7 +102,7 @@ const SEND_MODE = Object.freeze({
   PLAIN: 'plain',
   QUOTE: 'quote',
 });
-const LAYOUT_OBSERVER_GLOBAL = '__copilot_layoutObserver';
+const LAYOUT_OBSERVER_GLOBAL = appConfig.layoutObserverGlobal;
 
 // Unified reveal helper to avoid repeated show/focus chains
 function reveal(win) {
@@ -146,10 +132,10 @@ function initQuickChat() {
     getAppIconImage: () => appIconImage,
     getAppConfig,
     DEFAULT_APP_CONFIG,
-    getAppUrl: () => COPILOT_URL,
+    getAppUrl: () => APP_URL,
     appLabel: APP_LABEL,
     appSlug: APP_SLUG,
-    getAppPartition: () => COPILOT_PARTITION,
+    getAppPartition: () => APP_PARTITION,
     SEND_MODE,
     IPC,
     reveal,
@@ -219,7 +205,7 @@ function initDirectOpen() {
   directOpenInstance = createDirectOpen({
     session, shell, fs, path, app, ipcMain,
     getAppConfig,
-    getAppPartition: () => COPILOT_PARTITION,
+    getAppPartition: () => APP_PARTITION,
     appSlug: APP_SLUG,
     safeShowError,
   });
@@ -251,9 +237,10 @@ function initSessionHelpers() {
     app, BrowserWindow, dialog, shell,
     session, clipboard, nativeImage,
     fs, path, getAppConfig,
-    getAppPartition: () => COPILOT_PARTITION,
+    partition: APP_PARTITION,
     appLabel: APP_LABEL,
-    getAppUrl: () => COPILOT_URL,
+    getAppPartition: () => APP_PARTITION,
+    getAppUrl: () => APP_URL,
     getConfigFilePath,
     getLogFilePath,
     getMainWindow: () => mainWindow,
@@ -477,7 +464,7 @@ function buildTrayMenuTemplate() {
       label: 'Clear Session/Cache',
       submenu: [
         {
-          label: 'Clear Copilot Cache',
+          label: 'Clearr' + APP_LABEL + 'Cache',
           click: async () => {
             await clearCopilotCache();
           }
@@ -528,8 +515,8 @@ function refreshTrayMenu() {
   }
 }
 
-app.setName('copilot-for-linux');  // Shows as WMClass "yourapp" or "YourApp"
-app.setAppUserModelId('your.company.copilot');
+app.setName(appConfig.appName);
+app.setAppUserModelId(appConfig.appUserModelId);
 
 function ensureSaveState(win) {
   if (win && typeof win.__lastSavePath === 'undefined') win.__lastSavePath = null;
@@ -599,7 +586,7 @@ function initExporters() {
     dialog,
     safeShowError,
     executeInAllFrames,
-    getAppPartition: () => COPILOT_PARTITION,
+    getAppPartition: () => APP_PARTITION,
     buildLocateChatRootScript,
     appSlug: APP_SLUG,
     buildChatPaneDetectionScript,
@@ -657,7 +644,7 @@ function createWindow() {
   // Clean up any existing window first
   if (mainWindow) return; // do not destroy/recreate unless needed
 
-  const taIcon = nativeImage.createFromPath(getIconPath('copilot-for-linux.png'));
+  const taIcon = nativeImage.createFromPath(getIconPath(appConfig.iconFileName));
   /*     console.log('Native path resolved:', taIcon); // Echo to terminal
    * if (taIcon.isEmpty()) {
    *  console.error('ICON FAILED TO LOAD path is wrong or file corrupted');
@@ -695,10 +682,10 @@ function createWindow() {
       contextIsolation: true,      // safer: isolates preload from page
       sandbox: false,
       preload: path.join(__dirname, 'preload.js'), // optional: expose safe APIs
-                                 partition: COPILOT_PARTITION,
-                                 devTools: !!APP_CONFIG.devToolsEnabled,
-                                 backgroundThrottling: true,   // reduce CPU when hidden
-                                 spellcheck: false            // disable if not required
+      partition: APP_PARTITION,
+      devTools: !!APP_CONFIG.devToolsEnabled,
+      backgroundThrottling: true,   // reduce CPU when hidden
+      spellcheck: false            // disable if not required
     },
     // Linux-specific: ensure proper window identification
     type: 'normal',
@@ -766,7 +753,7 @@ function createWindow() {
   // const _origOn = mainWindow.webContents.on.bind(mainWindow.webContents);
   // mainWindow.webContents.on = (evt, fn) => { if (evt === 'did-stop-loading') console.trace('[TRACE] did-stop-loading on()'); return _origOn(evt, fn); };
 
-  mainWindow.loadURL(COPILOT_URL); // Load your app
+  mainWindow.loadURL(APP_URL);
 
   attachCSSAndLayoutHandlers(mainWindow, { role: 'main', revealOnReady: false });
   attachFindResultForwarding(mainWindow);
@@ -860,7 +847,7 @@ function getIconPath(filename) {
 
 function createTray() {
   // Use a 24x24 or 32x32 PNG for Cinnamon panel
-  const iconPath = getIconPath('copilot-for-linux.png');
+  const iconPath = getIconPath(appConfig.iconFileName);
 
   // Validate path during development (optional)
   //  console.log('Tray icon exists?', require('fs').existsSync(iconPath));
@@ -869,9 +856,9 @@ function createTray() {
   const smallImage = trayImage.isEmpty ? null : trayImage.resize({ width: 24, height: 24 });
 
   // Fall back to app icon if tray image is missing
-  tray = new Tray(smallImage || appIconImage || nativeImage.createFromPath(path.join(__dirname, 'assets', 'copilot-for-linux.png')));
+  tray = new Tray(smallImage || appIconImage || nativeImage.createFromPath(path.join(__dirname, 'assets', appConfig.iconFileName)));
 
-  tray.setToolTip('Microsoft Copilot');
+  tray.setToolTip(appConfig.trayToolTip || APP_LABEL);
   refreshTrayMenu();
   // Left-click toggles window visibility
   tray.on('click', () => {
