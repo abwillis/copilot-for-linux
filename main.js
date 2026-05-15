@@ -19,6 +19,7 @@ const { createContextMenu } = require('./lib/context-menu');
 const { createQuickChatManager } = require('./lib/quick-chat');
 const { createAppMenu } = require('./lib/app-menu');
 const { createTrayMenu } = require('./lib/tray-menu');
+const { createIconHelpers } = require('./lib/icon-helpers');
 
 // === App-specific modules ===
 const {
@@ -525,26 +526,18 @@ app.setAppUserModelId(appConfig.appUserModelId);
   initDirectOpen().registerDirectOpenIpcHandler(IPC);
 
 
-function getIconPath(filename) {
-  // Handle both development and packaged environments
-  //  const basePath = __dirname;
-  const basePath = app.getAppPath();
-  const iconPath = path.join(basePath, 'assets', filename);
-
-  // For packaged apps, try the asar-unpacked path first
-  if (app.isPackaged) {
-    const asarPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', filename);
-    if (require('fs').existsSync(asarPath)) {
-
-      //      console.log('Icon path resolved:', asarPath); // Echo to terminal
-
-      return asarPath;
-    }
-  }
-
-  //      console.log('Icon path resolved:', iconPath); // Echo to terminal
-  return iconPath;
+let iconHelpersInstance = null;
+function initIconHelpers() {
+  if (iconHelpersInstance) return iconHelpersInstance;
+  iconHelpersInstance = createIconHelpers({
+    app,
+    fs,
+    path,
+    process,
+  });
+  return iconHelpersInstance;
 }
+function getIconPath(...args) { return initIconHelpers().getIconPath(...args); }
 
 function createWindow() {
   // Clean up any existing window first
