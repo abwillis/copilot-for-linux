@@ -217,11 +217,11 @@ function initSessionHelpers() {
   return sessionHelpersInstance;
 }
 function getRuntimeInfo() { return initSessionHelpers().getRuntimeInfo(); }
-function getCopilotSession() { return initSessionHelpers().getAppSession(); }
-function getActiveCopilotWindow() { return initSessionHelpers().getActiveAppWindow(); }
-function getActiveCopilotWebContents() { return initSessionHelpers().getActiveAppWebContents(); }
-function reloadCopilot(...a) { return initSessionHelpers().reloadApp(...a); }
-function clearCopilotCache() { return initSessionHelpers().clearAppCache(); }
+function getAppSession(...args) { return initSessionHelpers().getAppSession(...args); }
+function getActiveAppWindow(...args) { return initSessionHelpers().getActiveAppWindow(...args); }
+function getActiveAppWebContents(...args) { return initSessionHelpers().getActiveAppWebContents(...args); }
+function reloadApp(...args) { return initSessionHelpers().reloadApp(...args); }
+function clearAppCache(...args) { return initSessionHelpers().clearAppCache(...args); }
 function clearCookiesAndSignOut() { return initSessionHelpers().clearCookiesAndSignOut(); }
 function copyCurrentUrl() { return initSessionHelpers().copyCurrentUrl(); }
 function openCurrentUrlExternal() { return initSessionHelpers().openCurrentUrlExternal(); }
@@ -476,7 +476,7 @@ function initAppMenu() {
     getAppConfig, getMainWindow: () => mainWindow,
     appLabel: APP_LABEL,
     openFindModal, initFindInPage,
-    reloadApp: reloadCopilot, clearAppCache: clearCopilotCache, clearCookiesAndSignOut,
+    reloadApp, clearAppCache, clearCookiesAndSignOut,
     copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage,
@@ -500,7 +500,7 @@ function appendFileItems(...a) { return initAppMenu().appendFileItems(...a); }
 // ============================================================================
 
 function buildTrayMenuTemplate() {
-  const activeWindow = getActiveCopilotWindow();
+  const activeWindow = getActiveAppWindow();
   const activeQuick = APP_CONFIG.enableQuickChat ? getActiveQuickChatWindow({ createIfMissing: false }) : null;
   const activeWindowIsAlwaysOnTop = !!activeWindow?.isAlwaysOnTop?.();
   const mainVisible = !!mainWindow && !mainWindow.isDestroyed?.() && mainWindow.isVisible?.();
@@ -545,7 +545,7 @@ function buildTrayMenuTemplate() {
       accelerator: 'Ctrl+S',
       enabled: !!activeWindow && !activeWindow.isDestroyed?.(),
       click: async () => {
-        const win = getActiveCopilotWindow();
+        const win = getActiveAppWindow();
         if (win) await promptSaveChatPane(win);
       }
     },
@@ -553,7 +553,7 @@ function buildTrayMenuTemplate() {
     {
       label: 'Reload',
       accelerator: 'Ctrl+R',
-      click: () => reloadCopilot({ ignoreCache: false })
+      click: () => reloadApp({ ignoreCache: false })
     },
     {
       label: 'Toggle Always on Top',
@@ -568,7 +568,7 @@ function buildTrayMenuTemplate() {
         {
           label: 'Clearr' + APP_LABEL + 'Cache',
           click: async () => {
-            await clearCopilotCache();
+            await clearAppCache();
           }
         },
         {
