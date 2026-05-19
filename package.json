@@ -1,11 +1,12 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.17.00",
+  "version": "1.17.02",
   "description": "Copilot for Linux",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --linux rpm",
+    "dist:deb": "electron-builder --linux deb",
     "dist:win": "electron-builder --win nsis portable"
   },
   "build": {
@@ -16,6 +17,8 @@
     },
     "files": [
       "main.js",
+      "main.bootstrap.js",
+      "app.config.js",
       "preload.js",
       "preload-core.js",
       "renderer.js",
@@ -35,6 +38,12 @@
       "target": [
         {
           "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
           "arch": [
             "x64"
           ]
