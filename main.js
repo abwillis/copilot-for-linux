@@ -207,6 +207,7 @@ function initFindInPage() {
   });
   return findInPageInstance;
 }
+
 function openFindModal(...args) { return initFindInPage().openFindModal(...args); }
 function attachFindResultForwarding(...args) { return initFindInPage().attachFindResultForwarding(...args); }
 function resetFindModalResults(...args) { return initFindInPage().resetFindModalResults(...args); }
@@ -228,14 +229,12 @@ function initDirectOpen() {
   });
   return directOpenInstance;
 }
+
 function registerDirectOpenDownloadHandler(...args) { return initDirectOpen().registerDirectOpenDownloadHandler(...args); }
 function registerDirectOpenIpcHandler(...args) { return initDirectOpen().registerDirectOpenIpcHandler(...args); }
 function pruneExpiredDirectOpenRequests(...args) { return initDirectOpen().pruneExpiredDirectOpenRequests(...args); }
 function cleanupTempFiles(...args) { return initDirectOpen().cleanupTempFiles(...args); }
 function debugDirectOpen(...args) { return initDirectOpen().debugDirectOpen(...args); }
-
-
-
 
 // ---------- Exporter module bridge ----------
 let exportersInstance = null;
@@ -310,8 +309,12 @@ function initContextMenu() {
   });
   return contextMenuInstance;
 }
-function buildContextMenuTemplate(...args) { return initContextMenu().buildContextMenuTemplate(...args); }
-function registerShowContextMenuIpcHandler(...args) { return initContextMenu().registerShowContextMenuIpcHandler(...args); }
+function buildContextMenuTemplate(...args) {
+    return initContextMenu().buildContextMenuTemplate(...args);
+}
+function registerShowContextMenuIpcHandler(...args) {
+    return initContextMenu().registerShowContextMenuIpcHandler(...args);
+}
 
 // ---------- Quick Chat module bridge ----------
 let quickChatManager = null;
@@ -373,13 +376,14 @@ function createQuickChatWindow(...args) { return initQuickChat().createQuickChat
 async function sendSelectionToQuick(...args) { return initQuickChat().sendSelectionToQuick(...args); }
 async function sendSelectionToSpecificQuickViaDialog(...args) { return initQuickChat().sendSelectionToSpecificQuickViaDialog(...args); }
 function buildSendToQuickSubmenu(...args) { return initQuickChat().buildSendToQuickSubmenu(...args); }
+
+// ============================================================================
+// Utility — ensureSaveState
+// ============================================================================
 function ensureSaveState(...args) { return initWindowHelpers().ensureSaveState(...args); }
-
-
 
 // ---------- App-menu module bridge ----------
 let appMenuInstance = null;
-
 function initAppMenu() {
   if (appMenuInstance) return appMenuInstance;
   appMenuInstance = createAppMenu({
@@ -406,9 +410,9 @@ function appendSessionItems(...args) { return initAppMenu().appendSessionItems(.
 function augmentApplicationMenu(...args) { return initAppMenu().augmentApplicationMenu(...args); }
 function appendFileItems(...args) { return initAppMenu().appendFileItems(...args); }
 
-
-// ============================================================================
-
+// ============================================================
+// Tray menu (rebuilt when Quick Chat windows change)
+// ============================================================
 let trayMenuInstance = null;
 function initTrayMenu() {
   if (trayMenuInstance) return trayMenuInstance;
@@ -449,17 +453,14 @@ function buildTrayMenuTemplate(...args) { return initTrayMenu().buildTrayMenuTem
 function refreshTrayMenu(...args) { return initTrayMenu().refreshTrayMenu(...args); }
 function createTray(...args) { return initTrayMenu().createTray(...args); }
 
-app.setName(appConfig.appName);
-app.setAppUserModelId(appConfig.appUserModelId);
-
 // ============================================================================
 // Structured selection -> envelope -> quick chat inject (active OR specific #N)
 // ============================================================================
-
-
   initDirectOpen().registerDirectOpenIpcHandler(IPC);
 
-
+// ============================================================
+// Icon helper
+// ============================================================
 let iconHelpersInstance = null;
 function initIconHelpers() {
   if (iconHelpersInstance) return iconHelpersInstance;
@@ -473,6 +474,9 @@ function initIconHelpers() {
 }
 function getIconPath(...args) { return initIconHelpers().getIconPath(...args); }
 
+// ============================================================
+// createWindow
+// ============================================================
 let mainWindowManagerInstance = null;
 function initMainWindowManager() {
   if (mainWindowManagerInstance) return mainWindowManagerInstance;
@@ -515,6 +519,7 @@ function initMainWindowManager() {
   return mainWindowManagerInstance;
 }
 function createWindow(...args) { return initMainWindowManager().createWindow(...args); }
+
 // ============================================================
 // App lifecycle
 // ============================================================
