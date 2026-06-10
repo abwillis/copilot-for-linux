@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.17.11",
+  "version": "1.17.12",
   "description": "Copilot for Linux",
   "desktopName": "copilot-for-linux",
   "main": "main.js",
@@ -31,7 +31,7 @@
       "**/*.node",
       "vendor/**",
       "resources/**",
-      "assets/*.png",
+      "assets/icons/*.png",
       "assets/win/*.ico"
     ],
     "linux": {
