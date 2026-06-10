@@ -293,6 +293,8 @@ async function saveChatPaneAsText(...args) { return initExporters().saveChatPane
 function escapeHtmlForExport(...args) { return initExporters().escapeHtmlForExport(...args); }
 function buildPrintableChatPaneHtml(...args) { return initExporters().buildPrintableChatPaneHtml(...args); }
 async function writeHtmlDocumentToPDF(...args) { return initExporters().writeHtmlDocumentToPDF(...args); }
+async function printChatPane(...args) { return initExporters().printChatPane(...args); }
+async function printSelection(...args) { return initExporters().printSelection(...args); }
 async function saveChatPaneAsPDF(...args) { return initExporters().saveChatPaneAsPDF(...args); }
 async function saveAsDialog(...args) { return initExporters().saveAsDialog(...args); }
 
@@ -397,7 +399,7 @@ function initAppMenu() {
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage,
     buildExportProfileMenuTemplate, promptExportWithProfile,
-    selectChatPane, promptSaveChatPane, saveSelectionAsMarkdown, EXPORT_SCOPES,
+    selectChatPane, promptSaveChatPane, printChatPane, printSelection, saveSelectionAsMarkdown, EXPORT_SCOPES,
     buildQuickChatManagerMenuTemplate, installQuickChatMenu, refreshQuickChatMenu,
     createQuickChatWindow, buildSendToQuickSubmenu, SEND_MODE,
     ensureSaveState,
