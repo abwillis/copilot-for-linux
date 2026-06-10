@@ -1,7 +1,8 @@
 {
   "name": "copilot-for-linux",
-  "version": "1.17.10",
+  "version": "1.17.11",
   "description": "Copilot for Linux",
+  "desktopName": "copilot-for-linux",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -35,6 +36,7 @@
     ],
     "linux": {
       "executableName": "copilot-for-linux",
+      "syncDesktopName": true,
       "target": [
         {
           "target": "rpm",
@@ -50,7 +52,7 @@
         }
       ],
       "category": "Utility",
-      "icon": "assets",
+      "icon": "assets/icons",
       "maintainer": "Name <name@mail.com>",
       "vendor": "Name <name@mail.com>",
       "synopsis": "Copilot Electron App",
