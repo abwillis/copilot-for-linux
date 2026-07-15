@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Find in Page</title>
+  <style>
+    body { font-family: system-ui, "Segoe UI", Arial, sans-serif; margin: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    input[type=text] { flex: 1; padding: 6px 8px; }
+    .actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
+    .status { margin-top: 8px; min-height: 18px; font-size: 12px; color: #555; }
+    .status.searching { color: #555; }
+    .status.none { color: #9a3412; }
+    .status.ok { color: #166534; }
+    label { font-size: 12px; color: #444; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <input id="term" type="text" placeholder="Find in page..." autofocus />
+    <label><input id="match" type="checkbox"> Match case</label>
+  </div>
+  <div id="status" class="status">No active search</div>
+  <div class="actions">
+    <button id="prev">Previous</button>
+    <button id="next">Next</button>
+    <button id="clear">Clear</button>
+    <button id="close">Close</button>
+  </div>
+  <script src="./find-modal.js"></script>
+</body>
+</html>

@@ -26,6 +26,17 @@ module.exports = Object.freeze({
   trayToolTip: 'Microsoft Copilot',
   partitionEnvVar: 'COPILOT_PARTITION',
   layoutObserverGlobal: '__copilot_layoutObserver',
+  rendererApiGlobal: '__copilotRenderer',
+  rendererAgentVersion: 1,
+
+  dynamicWidth: Object.freeze({
+    cssVar: '--copilot-vw',
+    minVw: 70,
+    maxVw: 100,
+    defaultVw: 100,
+    screenPercent: 95,
+  }),
+
   defaultAppConfig,
 });
 
