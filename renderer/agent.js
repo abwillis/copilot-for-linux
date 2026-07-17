@@ -489,6 +489,9 @@
   // -------------------------------------------------------------------------
   var pdfPrintState = null;
   var pdfHydrateState = null;
+  var pdfLayoutBaseline = null;
+  var pdfBeforePrintDiagnostic = null;
+  var pdfBeforePrintHandler = null;
 
   function getPdfTargetPane(fallbackSelector) {
     var chatPane = null;
@@ -504,6 +507,799 @@
     }
 
     return chatPane || null;
+  }
+
+  function normalizeDiagnosticSelectors(selectors) {
+    if (!Array.isArray(selectors)) return [];
+    var result = [];
+    for (var i = 0; i < selectors.length; i++) {
+      var selector = String(selectors[i] || '').trim();
+      if (!selector || result.indexOf(selector) !== -1) continue;
+      try {
+        document.documentElement.matches(selector);
+        result.push(selector);
+      } catch (e) {}
+    }
+    return result;
+  }
+  function matchingDiagnosticSelectors(el, selectors) {
+    var matches = [];
+    if (!el || !el.matches) return matches;
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        if (el.matches(selectors[i])) matches.push(selectors[i]);
+      } catch (e) {}
+    }
+    return matches;
+  }
+  function diagnosticTextSignature(el) {
+    try {
+      var text = String(el && (el.innerText || el.textContent) || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      var h = 2166136261;
+      for (var i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+      }
+      return {
+        length: text.length,
+        hash: String(h >>> 0),
+        head: text.slice(0, 240),
+        tail: text.slice(-480),
+        descendantCount: el && el.querySelectorAll
+          ? el.querySelectorAll('*').length
+          : 0
+      };
+    } catch (e) {
+      return { length: 0, hash: '0', head: '', tail: '', descendantCount: 0 };
+    }
+  }
+  function containingDiagnosticSelectors(el, root, selectors) {
+    var matches = [];
+    if (!el || !el.closest) return matches;
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var owner = el.closest(selectors[i]);
+        if (owner && root.contains(owner)) matches.push(selectors[i]);
+      } catch (e) {}
+    }
+    return matches;
+  }
+  function diagnosticClientRects(el) {
+    try {
+      return Array.from(el.getClientRects ? el.getClientRects() : [])
+        .slice(0, 20)
+        .map(function (rect) {
+          return {
+            top: Math.round(Number(rect.top || 0)),
+            bottom: Math.round(Number(rect.bottom || 0)),
+            left: Math.round(Number(rect.left || 0)),
+            right: Math.round(Number(rect.right || 0)),
+            width: Math.round(Number(rect.width || 0)),
+            height: Math.round(Number(rect.height || 0))
+          };
+        });
+    } catch (e) { return []; }
+  }
+  function measureDiagnosticElement(el, root, selectors) {
+    var rect = el.getBoundingClientRect();
+    var cs = getComputedStyle(el);
+    var className = '';
+    var parent = el.parentElement;
+    var childIndex = -1;
+    var siblingCount = 0;
+    var depthFromRoot = 0;
+    try {
+      className = typeof el.className === 'string'
+        ? el.className
+        : String(el.getAttribute('class') || '');
+    } catch (e) {}
+    try {
+      if (parent) {
+        var siblings = Array.from(parent.children || []);
+        childIndex = siblings.indexOf(el);
+        siblingCount = siblings.length;
+      }
+    } catch (e) {}
+    try {
+      var depthNode = el;
+      while (depthNode && depthNode !== root) {
+        depthFromRoot++;
+        depthNode = depthNode.parentElement;
+      }
+      if (depthNode !== root) depthFromRoot = -1;
+    } catch (e) {
+      depthFromRoot = -1;
+    }
+    var textSignature = diagnosticTextSignature(el);
+    return {
+      label: elementLabel(el),
+      tagName: String(el.tagName || '').toLowerCase(),
+      id: String(el.id || '') || null,
+      className: String(className || '').trim().slice(0, 500),
+      parentLabel: parent ? elementLabel(parent) : null,
+      parentId: parent && parent.id ? String(parent.id) : null,
+      childIndex: childIndex,
+      siblingCount: siblingCount,
+      depthFromRoot: depthFromRoot,
+      directChildOfRoot: parent === root,
+      top: Math.round(Number(rect.top || 0)),
+      bottom: Math.round(Number(rect.bottom || 0)),
+      rectHeight: Math.round(Number(rect.height || 0)),
+      scrollHeight: Number(el.scrollHeight || 0),
+      clientHeight: Number(el.clientHeight || 0),
+      offsetHeight: Number(el.offsetHeight || 0),
+      clientRects: diagnosticClientRects(el),
+      display: String(cs.display || ''),
+      position: String(cs.position || ''),
+      visibility: String(cs.visibility || ''),
+      opacity: String(cs.opacity || ''),
+      height: String(cs.height || ''),
+      minHeight: String(cs.minHeight || ''),
+      maxHeight: String(cs.maxHeight || ''),
+      blockSize: String(cs.blockSize || ''),
+      minBlockSize: String(cs.minBlockSize || ''),
+      maxBlockSize: String(cs.maxBlockSize || ''),
+      flex: String(cs.flex || ''),
+      flexGrow: String(cs.flexGrow || ''),
+      flexShrink: String(cs.flexShrink || ''),
+      flexBasis: String(cs.flexBasis || ''),
+      alignSelf: String(cs.alignSelf || ''),
+      gridRow: String(cs.gridRow || ''),
+      gridRowStart: String(cs.gridRowStart || ''),
+      gridRowEnd: String(cs.gridRowEnd || ''),
+      computedTop: String(cs.top || ''),
+      transform: String(cs.transform || ''),
+      translate: String(cs.translate || ''),
+      overflow: String(cs.overflow || ''),
+      overflowX: String(cs.overflowX || ''),
+      overflowY: String(cs.overflowY || ''),
+      breakBefore: String(cs.breakBefore || ''),
+      breakAfter: String(cs.breakAfter || ''),
+      breakInside: String(cs.breakInside || ''),
+      pageBreakBefore: String(cs.pageBreakBefore || ''),
+      pageBreakAfter: String(cs.pageBreakAfter || ''),
+      pageBreakInside: String(cs.pageBreakInside || ''),
+      orphans: String(cs.orphans || ''),
+      widows: String(cs.widows || ''),
+      contentVisibility: String(cs.contentVisibility || ''),
+      contain: String(cs.contain || ''),
+      containIntrinsicSize: String(cs.containIntrinsicSize || ''),
+      clip: String(cs.clip || ''),
+      clipPath: String(cs.clipPath || ''),
+      inlineTop: String((el.style && el.style.top) || ''),
+      inlineTransform: String((el.style && el.style.transform) || ''),
+      matchedTargetSelectors: matchingDiagnosticSelectors(el, selectors),
+      insideTargetSelectors: containingDiagnosticSelectors(el, root, selectors),
+      textLength: textSignature.length,
+      textHash: textSignature.hash,
+      textHead: textSignature.head,
+      textTail: textSignature.tail,
+      descendantCount: textSignature.descendantCount,
+      isConnected: !!el.isConnected,
+      isIframe: String(el.tagName || '').toUpperCase() === 'IFRAME'
+    };
+  }
+  function capturePdfLayoutBaseline(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    var targetSelectors = normalizeDiagnosticSelectors(opts.targetSelectors);
+    try {
+      var root = getPdfTargetPane(fallbackSelector);
+      if (!root) return { ok: false, error: 'chat pane not found' };
+      var byElement = new Map();
+      var measurementErrorCount = 0;
+      var firstMeasurementError = null;
+      var nodes = [root].concat(Array.from(root.querySelectorAll('*')));
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        try {
+          byElement.set(
+            el,
+            measureDiagnosticElement(el, root, targetSelectors)
+          );
+        } catch (e) {
+          measurementErrorCount++;
+          if (!firstMeasurementError) {
+            firstMeasurementError = {
+              label: elementLabel(el),
+              error: String((e && e.message) || e)
+            };
+          }
+        }
+      }
+      var rootMeasurement = byElement.get(root) || null;
+      var rowElements = getDiagnosticRows(root);
+      pdfLayoutBaseline = {
+        root: root,
+        byElement: byElement,
+        targetSelectors: targetSelectors,
+        rootMeasurement: rootMeasurement,
+        rowElements: rowElements
+      };
+      return {
+        ok: byElement.size > 0,
+        partial: measurementErrorCount > 0,
+        elementCount: byElement.size,
+        measurementErrorCount: measurementErrorCount,
+        firstMeasurementError: firstMeasurementError,
+        targetSelectors: targetSelectors,
+        root: rootMeasurement,
+        rowCount: rowElements.length,
+        rows: rowElements.map(function (row, index) {
+          return {
+            index: index,
+            label: elementLabel(row),
+            id: row.id ? String(row.id) : null,
+            parentLabel: elementLabel(row.parentElement)
+          };
+        })
+      };
+    } catch (e) {
+      pdfLayoutBaseline = null;
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function diagnosticStyleChanges(liveMeasurement, currentMeasurement) {
+    var changes = {};
+    if (!liveMeasurement || !currentMeasurement) return changes;
+    var props = [
+      'display', 'position', 'height', 'minHeight', 'maxHeight',
+      'blockSize', 'minBlockSize', 'maxBlockSize',
+      'flex', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf',
+      'gridRow', 'gridRowStart', 'gridRowEnd',
+      'computedTop', 'transform', 'translate',
+      'overflow', 'overflowX', 'overflowY',
+      'breakBefore', 'breakAfter', 'breakInside',
+      'pageBreakBefore', 'pageBreakAfter', 'pageBreakInside',
+      'orphans', 'widows', 'visibility', 'opacity',
+      'contentVisibility', 'contain', 'containIntrinsicSize',
+      'clip', 'clipPath', 'inlineTop', 'inlineTransform'
+    ];
+    for (var i = 0; i < props.length; i++) {
+      var prop = props[i];
+      var liveValue = String(liveMeasurement[prop] || '');
+      var currentValue = String(currentMeasurement[prop] || '');
+      if (liveValue !== currentValue) {
+        changes[prop] = { live: liveValue, final: currentValue };
+      }
+    }
+    return changes;
+  }
+  function diagnosticSizingRules(el) {
+    var matches = [];
+    var inaccessibleStyleSheetCount = 0;
+    var properties = [
+      'height', 'min-height', 'max-height',
+      'block-size', 'min-block-size', 'max-block-size',
+      'flex', 'flex-grow', 'flex-shrink', 'flex-basis',
+      'align-self', 'position', 'top', 'bottom', 'transform',
+      'break-before', 'break-after', 'break-inside',
+      'page-break-before', 'page-break-after', 'page-break-inside',
+      'orphans', 'widows',
+      'overflow', 'overflow-x', 'overflow-y',
+      'visibility', 'content-visibility', 'contain',
+      'clip', 'clip-path'
+    ];
+    function matchingDeclarations(style) {
+      var declarations = {};
+      if (!style) return declarations;
+      for (var i = 0; i < properties.length; i++) {
+        var property = properties[i];
+        var value = String(style.getPropertyValue(property) || '').trim();
+        if (!value) continue;
+        declarations[property] = {
+          value: value,
+          priority: String(style.getPropertyPriority(property) || '')
+        };
+      }
+      return declarations;
+    }
+    function walkRules(rules, source, condition) {
+      if (!rules || matches.length >= 24) return;
+      for (var i = 0; i < rules.length && matches.length < 24; i++) {
+        var rule = rules[i];
+        try {
+          if (rule.selectorText && el.matches(rule.selectorText)) {
+            var declarations = matchingDeclarations(rule.style);
+            if (Object.keys(declarations).length) {
+              matches.push({
+                source: source,
+                condition: condition || null,
+                selector: String(rule.selectorText || ''),
+                declarations: declarations
+              });
+            }
+          }
+          if (rule.cssRules) {
+            walkRules(
+              rule.cssRules,
+              source,
+              String(rule.conditionText || condition || '')
+            );
+          }
+        } catch (e) {}
+      }
+    }
+    try {
+      var inlineDeclarations = matchingDeclarations(el && el.style);
+      if (Object.keys(inlineDeclarations).length) {
+        matches.push({
+          source: 'element.style',
+          condition: null,
+          selector: null,
+          declarations: inlineDeclarations
+        });
+      }
+    } catch (e) {}
+    try {
+      var sheets = Array.from(document.styleSheets || []);
+      for (var i = 0; i < sheets.length && matches.length < 24; i++) {
+        var sheet = sheets[i];
+        var source = String(sheet.href || 'inline-style-sheet');
+        try {
+          walkRules(sheet.cssRules, source, '');
+        } catch (e) {
+          inaccessibleStyleSheetCount++;
+        }
+      }
+    } catch (e) {}
+    return {
+      matches: matches,
+      inaccessibleStyleSheetCount: inaccessibleStyleSheetCount
+    };
+  }
+  function diagnosticParseVirtualY(value) {
+    try {
+      var s = String(value || '');
+      var m3d = s.match(/matrix3d\(([^)]+)\)/i);
+      if (m3d) {
+        var parts3d = m3d[1].split(',').map(function (x) {
+          return Number(String(x).trim());
+        });
+        if (parts3d.length >= 14 && isFinite(parts3d[13])) {
+          return parts3d[13];
+        }
+      }
+      var m2d = s.match(/matrix\(([^)]+)\)/i);
+      if (m2d) {
+        var parts2d = m2d[1].split(',').map(function (x) {
+          return Number(String(x).trim());
+        });
+        if (parts2d.length >= 6 && isFinite(parts2d[5])) {
+          return parts2d[5];
+        }
+      }
+      var translate = s.match(
+        /translate(?:3d)?\([^,]+,\s*([-0-9.]+)px/i
+      );
+      if (translate && isFinite(Number(translate[1]))) {
+        return Number(translate[1]);
+      }
+      var translateY = s.match(/translateY\(\s*([-0-9.]+)px/i);
+      if (translateY && isFinite(Number(translateY[1]))) {
+        return Number(translateY[1]);
+      }
+    } catch (e) {}
+    return null;
+  }
+  function getDiagnosticRows(root) {
+    try {
+      var baselineRows = pdfLayoutBaseline &&
+        pdfLayoutBaseline.root === root &&
+        Array.isArray(pdfLayoutBaseline.rowElements)
+          ? pdfLayoutBaseline.rowElements
+          : null;
+      if (
+        baselineRows &&
+        baselineRows.length &&
+        baselineRows.every(function (row) {
+          return row && row.isConnected && root.contains(row);
+        })
+      ) {
+        return baselineRows.slice();
+      }
+    } catch (e) {}
+    var rows = [];
+    var rowSelector = safeSelectorList(DOM_COLLECTION_ROW_SELECTORS);
+    var messageSelector = safeSelectorList(DOM_COLLECTION_SELECTORS);
+    function meaningfulDirectChildren(container) {
+      if (!container || !container.children) return [];
+      return Array.from(container.children).filter(function (child) {
+        try {
+          if (!root.contains(child)) return false;
+          if (rowSelector && child.matches(rowSelector)) return true;
+          if (messageSelector && child.matches(messageSelector)) return true;
+          if (messageSelector && child.querySelector(messageSelector)) return true;
+          return false;
+        } catch (e) {
+          return false;
+        }
+      });
+    }
+    // Prefer mounted direct children of a configured virtualizer. A configured
+    // row selector can also match the virtualizer itself; querying it first
+    // incorrectly collapses every conversation into diagnostic row zero.
+    if (VIRTUALIZER_SELECTORS.length) {
+      try {
+        var virtualizerSelector = safeSelectorList(VIRTUALIZER_SELECTORS);
+        var virtualizers = virtualizerSelector
+          ? Array.from(root.querySelectorAll(virtualizerSelector))
+          : [];
+        var bestDirectRows = [];
+        for (var i = 0; i < virtualizers.length; i++) {
+          var directRows = meaningfulDirectChildren(virtualizers[i]);
+          if (directRows.length > bestDirectRows.length) {
+            bestDirectRows = directRows;
+          }
+        }
+        if (bestDirectRows.length) rows = bestDirectRows;
+      } catch (e) {
+        rows = [];
+      }
+    }
+    if (!rows.length && rowSelector) {
+      try {
+        rows = Array.from(root.querySelectorAll(rowSelector));
+        // If the selector found one containing element, promote its meaningful
+        // direct children. This preserves generic configuration while avoiding
+        // a virtualizer/container being reported as the only conversation row.
+        if (rows.length === 1) {
+          var promotedRows = meaningfulDirectChildren(rows[0]);
+          if (promotedRows.length) rows = promotedRows;
+        }
+      } catch (e) {
+        rows = [];
+      }
+    }
+    if (!rows.length) {
+      try {
+        var scroller = findBestChatScroller(root, null);
+        if (scroller && root.contains(scroller)) {
+          rows = meaningfulDirectChildren(scroller);
+        }
+      } catch (e) {
+        rows = [];
+      }
+    }
+    rows = rows.filter(function (row, index, list) {
+      return row && root.contains(row) && list.indexOf(row) === index;
+    });
+    rows.sort(function (a, b) {
+      try {
+        return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+      } catch (e) {
+        return 0;
+      }
+    });
+    return rows;
+  }
+  function findDiagnosticRowOwner(el, rows) {
+    for (var i = 0; i < rows.length; i++) {
+      try {
+        if (rows[i] === el || rows[i].contains(el)) {
+          return { row: rows[i], index: i };
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  function measureDiagnosticRows(root, baselineByElement) {
+    var rowElements = getDiagnosticRows(root);
+    var rows = [];
+    var previousBottom = null;
+    var previousLiveBottom = null;
+    var sumOfRowHeights = 0;
+    var totalInterRowGap = 0;
+    for (var i = 0; i < rowElements.length; i++) {
+      var row = rowElements[i];
+      try {
+        var current = measureDiagnosticElement(row, root, []);
+        var live = baselineByElement ? baselineByElement.get(row) : null;
+        var gapBefore = previousBottom === null
+          ? null
+          : current.top - previousBottom;
+        var liveGapBefore = previousLiveBottom === null || !live
+          ? null
+          : live.top - previousLiveBottom;
+        var virtualY = diagnosticParseVirtualY(current.inlineTransform);
+        if (virtualY === null) {
+          virtualY = diagnosticParseVirtualY(current.transform);
+        }
+        var parent = row.parentElement;
+        var parentMeasurement = parent
+          ? measureDiagnosticElement(parent, root, [])
+          : null;
+        var parentStyle = null;
+        try { parentStyle = parent ? getComputedStyle(parent) : null; } catch (e) {}
+        rows.push({
+          index: i,
+          label: current.label,
+          id: current.id,
+          parentLabel: current.parentLabel,
+          childIndex: current.childIndex,
+          siblingCount: current.siblingCount,
+          configuredRowSelectors: DOM_COLLECTION_ROW_SELECTORS.filter(
+            function (selector) {
+              try { return row.matches(selector); } catch (e) { return false; }
+            }
+          ),
+          top: current.top,
+          bottom: current.bottom,
+          rectHeight: current.rectHeight,
+          scrollHeight: current.scrollHeight,
+          offsetHeight: current.offsetHeight,
+          liveTop: live ? live.top : null,
+          liveBottom: live ? live.bottom : null,
+          liveRectHeight: live ? live.rectHeight : null,
+          liveScrollHeight: live ? live.scrollHeight : null,
+          liveOffsetHeight: live ? live.offsetHeight : null,
+          rectHeightDelta: live ? current.rectHeight - live.rectHeight : null,
+          scrollHeightDelta: live
+            ? current.scrollHeight - live.scrollHeight
+            : null,
+          offsetHeightDelta: live
+            ? current.offsetHeight - live.offsetHeight
+            : null,
+            textLength: current.textLength,
+            liveTextLength: live ? live.textLength : null,
+            textLengthDelta: live ? current.textLength - live.textLength : null,
+            textHash: current.textHash,
+            liveTextHash: live ? live.textHash : null,
+            textChanged: live ? current.textHash !== live.textHash : null,
+            textTail: current.textTail,
+            liveTextTail: live ? live.textTail : null,
+            descendantCount: current.descendantCount,
+            liveDescendantCount: live ? live.descendantCount : null,
+          gapBefore: gapBefore,
+          liveGapBefore: liveGapBefore,
+          gapDelta: gapBefore !== null && liveGapBefore !== null
+            ? gapBefore - liveGapBefore
+            : null,
+          virtualY: virtualY,
+          display: current.display,
+          position: current.position,
+          height: current.height,
+          minHeight: current.minHeight,
+          maxHeight: current.maxHeight,
+          blockSize: current.blockSize,
+          minBlockSize: current.minBlockSize,
+          maxBlockSize: current.maxBlockSize,
+          liveHeight: live ? live.height : null,
+          liveMinHeight: live ? live.minHeight : null,
+          liveBlockSize: live ? live.blockSize : null,
+          liveMinBlockSize: live ? live.minBlockSize : null,
+          flex: current.flex,
+          flexGrow: current.flexGrow,
+          flexShrink: current.flexShrink,
+          flexBasis: current.flexBasis,
+          alignSelf: current.alignSelf,
+          computedTop: current.computedTop,
+          transform: current.transform,
+          inlineTop: current.inlineTop,
+          inlineTransform: current.inlineTransform,
+          parentLayout: parentMeasurement ? {
+            label: parentMeasurement.label,
+            rectHeight: parentMeasurement.rectHeight,
+            scrollHeight: parentMeasurement.scrollHeight,
+            offsetHeight: parentMeasurement.offsetHeight,
+            height: parentMeasurement.height,
+            minHeight: parentMeasurement.minHeight,
+            blockSize: parentMeasurement.blockSize,
+            minBlockSize: parentMeasurement.minBlockSize,
+            display: parentMeasurement.display,
+            flex: parentMeasurement.flex,
+            flexDirection: String(parentStyle && parentStyle.flexDirection || ''),
+            alignItems: String(parentStyle && parentStyle.alignItems || '')
+          } : null,
+          sizingRules: diagnosticSizingRules(row),
+          styleChanges: diagnosticStyleChanges(live, current)
+        });
+        sumOfRowHeights += current.rectHeight;
+        if (gapBefore !== null) totalInterRowGap += gapBefore;
+        previousBottom = current.bottom;
+        previousLiveBottom = live ? live.bottom : null;
+      } catch (e) {}
+    }
+    var rootRect = root.getBoundingClientRect();
+    var firstTop = rows.length ? rows[0].top : null;
+    var lastBottom = rows.length ? rows[rows.length - 1].bottom : null;
+    var occupiedExtent = firstTop === null || lastBottom === null
+      ? 0
+      : Math.max(0, lastBottom - firstTop);
+    return {
+      rows: rows,
+      summary: {
+          diagnosticVersion: 2,
+        rowCount: rows.length,
+          rowLabels: rows.map(function (row) { return row.label; }),
+          rowIds: rows.map(function (row) { return row.id; }),
+          rowParentLabels: rows.map(function (row) { return row.parentLabel; }),
+        firstTop: firstTop,
+        lastBottom: lastBottom,
+        occupiedExtent: occupiedExtent,
+        sumOfRowHeights: sumOfRowHeights,
+        totalInterRowGap: totalInterRowGap,
+        rootHeight: Math.round(Number(rootRect.height || 0)),
+        unexplainedRootHeight: Math.max(
+          0,
+          Math.round(Number(rootRect.height || 0)) - occupiedExtent
+        )
+      }
+    };
+  }
+  function capturePdfLayoutStage(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    try {
+      var root = getPdfTargetPane(fallbackSelector);
+      if (!root) return { ok: false, error: 'chat pane not found' };
+      var baselineByElement = pdfLayoutBaseline &&
+        pdfLayoutBaseline.root === root
+          ? pdfLayoutBaseline.byElement
+          : null;
+      var rowReport = measureDiagnosticRows(root, baselineByElement);
+      return {
+        ok: true,
+        stage: String(opts.stage || ''),
+        rootHeight: Math.round(Number(root.getBoundingClientRect().height || 0)),
+        rootScrollHeight: Number(root.scrollHeight || 0),
+        documentHeight: Number(
+          document.documentElement && document.documentElement.scrollHeight || 0
+        ),
+        conversationSummary: rowReport.summary,
+        conversationRows: rowReport.rows
+      };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function capturePdfTerminalContent(root, targetSelectors) {
+    var errors = [];
+    try {
+      var rows = getDiagnosticRows(root);
+      var finalRow = rows.length ? rows[rows.length - 1] : root;
+      var selectors = normalizeDiagnosticSelectors(targetSelectors);
+      var contentOwner = finalRow;
+      var bestTextLength = diagnosticTextSignature(finalRow).length;
+      for (var i = 0; i < selectors.length; i++) {
+        try {
+          Array.from(finalRow.querySelectorAll(selectors[i])).forEach(function (el) {
+            var length = diagnosticTextSignature(el).length;
+            if (length >= bestTextLength) {
+              bestTextLength = length;
+              contentOwner = el;
+            }
+          });
+        } catch (e) {
+          errors.push({ selector: selectors[i], error: String((e && e.message) || e) });
+        }
+      }
+      var semanticSelector = [
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p',
+        'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead',
+        'tbody', 'tr', 'blockquote', 'details', 'summary'
+      ].join(',');
+      var semantic = Array.from(contentOwner.querySelectorAll(semanticSelector));
+      var terminalElements = semantic.slice(-20).map(function (el) {
+        var measurement = measureDiagnosticElement(el, root, selectors);
+        measurement.sizingRules = diagnosticSizingRules(el);
+        return measurement;
+      });
+      var lists = semantic.filter(function (el) {
+        var tag = String(el.tagName || '').toLowerCase();
+        return tag === 'ul' || tag === 'ol';
+      });
+      var finalList = lists.length ? lists[lists.length - 1] : null;
+      var directItems = [];
+      var listAncestors = [];
+      if (finalList) {
+        directItems = Array.from(finalList.children || [])
+          .filter(function (el) {
+            return String(el.tagName || '').toLowerCase() === 'li';
+          })
+          .map(function (el, index) {
+            var measurement = measureDiagnosticElement(el, root, selectors);
+            measurement.index = index;
+            measurement.sizingRules = diagnosticSizingRules(el);
+            return measurement;
+          });
+        var ancestor = finalList;
+        while (ancestor && root.contains(ancestor)) {
+          var ancestorMeasurement = measureDiagnosticElement(ancestor, root, selectors);
+          ancestorMeasurement.sizingRules = diagnosticSizingRules(ancestor);
+          listAncestors.push(ancestorMeasurement);
+          if (ancestor === finalRow || ancestor === root) break;
+          ancestor = ancestor.parentElement;
+        }
+      }
+      return {
+        ok: true,
+        finalRowLabel: elementLabel(finalRow),
+        contentOwnerLabel: elementLabel(contentOwner),
+        terminalElements: terminalElements,
+        finalList: finalList ? {
+          measurement: measureDiagnosticElement(finalList, root, selectors),
+          sizingRules: diagnosticSizingRules(finalList),
+          directItemCount: directItems.length,
+          directItems: directItems,
+          ancestors: listAncestors
+        } : null,
+        errors: errors
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        error: String((e && e.message) || e),
+        errors: errors
+      };
+    }
+  }
+  function capturePdfPrintFragmentDiagnostic(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    try {
+      var root = getPdfTargetPane(fallbackSelector);
+      if (!root) return { ok: false, error: 'chat pane not found' };
+      var baselineByElement = pdfLayoutBaseline && pdfLayoutBaseline.root === root
+        ? pdfLayoutBaseline.byElement
+        : null;
+      var rowReport = measureDiagnosticRows(root, baselineByElement);
+      return {
+        ok: true,
+        diagnosticVersion: 3,
+        stage: String(opts.stage || 'beforeprint'),
+        captured: true,
+        media: {
+          print: !!(window.matchMedia && window.matchMedia('print').matches),
+          screen: !!(window.matchMedia && window.matchMedia('screen').matches)
+        },
+        rootHeight: Math.round(Number(root.getBoundingClientRect().height || 0)),
+        rootScrollHeight: Number(root.scrollHeight || 0),
+        documentHeight: Number(document.documentElement && document.documentElement.scrollHeight || 0),
+        conversationSummary: rowReport.summary,
+        conversationRows: rowReport.rows,
+        terminalContent: capturePdfTerminalContent(root, opts.targetSelectors || [])
+      };
+    } catch (e) {
+      return { ok: false, captured: true, error: String((e && e.message) || e) };
+    }
+  }
+  function armPdfBeforePrintDiagnostic(options) {
+    var opts = options || {};
+    try {
+      if (pdfBeforePrintHandler) {
+        window.removeEventListener('beforeprint', pdfBeforePrintHandler);
+      }
+    } catch (e) {}
+    pdfBeforePrintDiagnostic = null;
+    pdfBeforePrintHandler = function () {
+      pdfBeforePrintDiagnostic = capturePdfPrintFragmentDiagnostic({
+        fallbackSelector: String(opts.fallbackSelector || ''),
+        targetSelectors: Array.isArray(opts.targetSelectors)
+          ? opts.targetSelectors.slice()
+          : [],
+        stage: 'beforeprint'
+      });
+      pdfBeforePrintHandler = null;
+    };
+    try {
+      window.addEventListener('beforeprint', pdfBeforePrintHandler, { once: true });
+      return { ok: true, armed: true };
+    } catch (e) {
+      pdfBeforePrintHandler = null;
+      return { ok: false, armed: false, error: String((e && e.message) || e) };
+    }
+  }
+  function getPdfBeforePrintDiagnostic() {
+    return pdfBeforePrintDiagnostic || {
+      ok: false,
+      captured: false,
+      reason: 'beforeprint-not-observed'
+    };
   }
 
   function rememberStyle(el, props) {
@@ -549,7 +1345,7 @@
       var hidden = [];
       var overridden = [];
       var rootOverrides = [];
-
+      var rowMinSizeStyle = null;
       var current = chatPane;
       while (current && current !== document.documentElement) {
         var parent = current.parentElement;
@@ -641,17 +1437,40 @@
         document.body.style.setProperty('max-height', 'none', 'important');
       } catch (e) {}
 
+      // Some host virtualizers maintain an inline min-height on each mounted
+      // conversation row. Once the scroll container is flattened for print,
+      // that cached virtual extent can be rewritten as the row's min-height,
+      // turning one conversation into tens of thousands of pixels of blank
+      // printable space. Neutralize only the app-configured collection rows;
+      // their content continues to determine their natural printed height.
+      try {
+        var rowSelector = safeSelectorList(DOM_COLLECTION_ROW_SELECTORS);
+        if (rowSelector) {
+          rowMinSizeStyle = document.createElement('style');
+          rowMinSizeStyle.setAttribute('data-pdf-export-row-min-size', '1');
+          rowMinSizeStyle.textContent =
+            '[' + EXPORT_MARKER_ATTR + '="1"]:is(' + rowSelector + '),' +
+            '[' + EXPORT_MARKER_ATTR + '="1"] :is(' + rowSelector + ')' +
+            '{min-height:0!important;min-block-size:0!important;}';
+          (document.head || document.documentElement).appendChild(rowMinSizeStyle);
+        }
+      } catch (e) {
+        rowMinSizeStyle = null;
+      }
+
       pdfPrintState = {
         hidden: hidden,
         overridden: overridden,
-        rootOverrides: rootOverrides
+        rootOverrides: rootOverrides,
+        rowMinSizeStyle: rowMinSizeStyle
       };
 
       return {
         ok: true,
         hiddenCount: hidden.length,
         overriddenCount: overridden.length,
-        rootOverrideCount: rootOverrides.length
+        rootOverrideCount: rootOverrides.length,
+        rowMinSizeOverrideApplied: !!rowMinSizeStyle
       };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -660,12 +1479,24 @@
 
   function pdfRestore() {
     try {
+      try {
+        if (pdfBeforePrintHandler) {
+          window.removeEventListener('beforeprint', pdfBeforePrintHandler);
+        }
+      } catch (e) {}
+      pdfBeforePrintHandler = null;
       var state = pdfPrintState || window.__pdfPrintState;
       if (!state) return { ok: false, restored: false, reason: 'no-state' };
 
       var hiddenRestored = 0;
       var overriddenRestored = 0;
       var rootRestored = 0;
+
+      try {
+        if (state.rowMinSizeStyle && state.rowMinSizeStyle.parentNode) {
+          state.rowMinSizeStyle.parentNode.removeChild(state.rowMinSizeStyle);
+        }
+      } catch (e) {}
 
       try {
         var hidden = state.hidden || [];
@@ -715,6 +1546,8 @@
 
       pdfPrintState = null;
       pdfHydrateState = null;
+      pdfLayoutBaseline = null;
+      pdfBeforePrintDiagnostic = null;
       try { delete window.__pdfPrintState; } catch (e) {}
 
       return {
@@ -994,6 +1827,35 @@
     return candidates[0];
   }
 
+  function findCollapsedVirtualizerInsideRoot(root) {
+    if (!root || !root.querySelectorAll || !VIRTUALIZER_SELECTORS.length) {
+      return null;
+    }
+    try {
+      var selectorList = safeSelectorList(VIRTUALIZER_SELECTORS);
+      if (!selectorList) return null;
+      var candidates = Array.from(root.querySelectorAll(selectorList));
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (!el || el.nodeType !== 1) continue;
+        if (!visibleBox(el)) continue;
+        if (!matchesAnyVirtualizerSelector(el)) continue;
+        // pdfPrepare() deliberately removes the virtualizer's height and
+        // overflow constraints. At that point its range collapses to zero and
+        // document.scrollingElement inherits the printable document height.
+        // Treat that as an expanded print layout, not as a new scroll owner.
+        if (
+          scrollRange(el) <= 8 &&
+          Number(el.scrollHeight || 0) > 0 &&
+          Number(el.clientHeight || 0) > 0
+        ) {
+          return el;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
   // -------------------------------------------------------------------------
   // Hydrate virtualized content under the marked pane.
   //
@@ -1018,6 +1880,31 @@
     if (!root) return Promise.resolve({ ok: false, reason: 'no-marked-pane' });
     var scrollerCandidatesForDiag = [];
     var scroller = findBestChatScroller(root, scrollerCandidatesForDiag);
+
+    // pdfPrepare() can flatten a real nested virtualizer before hydration:
+    // its scroll range becomes zero while HTML becomes scrollable. Scrolling
+    // HTML in that state feeds the document's growing print height back into
+    // the virtualizer, so every bottom nudge increases scrollHeight again.
+    // Do not hydrate the synthetic document range. The expanded pane is
+    // already laid out for print, and walking HTML would manufacture blank
+    // printable space rather than reveal additional mounted rows.
+    var documentScroller = null;
+    try { documentScroller = document.scrollingElement; } catch (e) {}
+    var collapsedVirtualizer = null;
+    if (scroller && documentScroller && scroller === documentScroller) {
+      collapsedVirtualizer = findCollapsedVirtualizerInsideRoot(root);
+    }
+    if (collapsedVirtualizer) {
+      return Promise.resolve({
+        ok: true,
+        reason: 'expanded-print-layout',
+        steps: 0,
+        scrollerLabel: elementLabel(scroller),
+        collapsedVirtualizerLabel: elementLabel(collapsedVirtualizer),
+        scrollerRange: scrollRange(scroller),
+        scrollerCandidates: scrollerCandidatesForDiag.slice(0, 12)
+      });
+    }
 
     if (!scroller || scroller === document.body) {
       return Promise.resolve({
@@ -2196,6 +3083,368 @@ function waitForPrintableAssets(options) {
   })();
 }
 
+  function diagnosePdfLayout(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    var expectedHeight = Number(opts.expectedHeight || 0);
+    var limit = Math.max(1, Number(opts.limit || opts.maxEntries || 20));
+    var minimumExcess = Math.max(0, Number(opts.minimumExcess || 500));
+    var topDescendantLimit = Math.max(
+      1,
+      Number(opts.topDescendantLimit || 20)
+    );
+
+    var topGrowthLimit = Math.max(
+      1,
+      Number(opts.topGrowthLimit || 30)
+    );
+
+    try {
+      var root = getPdfTargetPane(fallbackSelector);
+      if (!root) {
+        return {
+          ok: false,
+          error: 'chat pane not found'
+        };
+      }
+
+      var targetSelectors = normalizeDiagnosticSelectors(
+        Array.isArray(opts.targetSelectors) && opts.targetSelectors.length
+          ? opts.targetSelectors
+          : (pdfLayoutBaseline && pdfLayoutBaseline.targetSelectors) || []
+      );
+      var baselineByElement = pdfLayoutBaseline &&
+        pdfLayoutBaseline.root === root
+          ? pdfLayoutBaseline.byElement
+          : null;
+
+      var rootRect = root.getBoundingClientRect();
+      var rootTop = Number(rootRect.top || 0);
+      var rootBottom = Number(rootRect.bottom || 0);
+      var baselineRoot = pdfLayoutBaseline &&
+        pdfLayoutBaseline.root === root
+          ? pdfLayoutBaseline.rootMeasurement
+          : null;
+      var liveExpectedHeight = Math.max(
+        expectedHeight,
+        Number(baselineRoot && baselineRoot.rectHeight || 0),
+        Number(baselineRoot && baselineRoot.scrollHeight || 0),
+        Number(baselineRoot && baselineRoot.offsetHeight || 0)
+      );
+      if (!liveExpectedHeight) {
+        liveExpectedHeight = Math.round(Number(rootRect.height || 0));
+      }
+      var expectedBottom = rootTop + liveExpectedHeight;
+      var diagnosticRowElements = getDiagnosticRows(root);
+      var rowReport = measureDiagnosticRows(root, baselineByElement);
+
+      var suspicious = [];
+      var duplicateIds = {};
+      var ids = Object.create(null);
+
+      Array.from(root.querySelectorAll('*')).forEach(function (el) {
+        try {
+          var cs = getComputedStyle(el);
+          var rect = el.getBoundingClientRect();
+          var id = String(el.id || '');
+          var position = String(cs.position || '');
+          var transform = String(cs.transform || '');
+          var backgroundImage = String(cs.backgroundImage || '');
+          var maskImage = String(
+            cs.maskImage ||
+            cs.webkitMaskImage ||
+            ''
+          );
+          var farBelow =
+            Number(rect.top || 0) > expectedBottom + minimumExcess ||
+            Number(rect.bottom || 0) > expectedBottom + minimumExcess;
+          var liveMeasurement = baselineByElement
+            ? baselineByElement.get(el)
+            : null;
+          var largeAbsolute =
+            Number(rect.height || 0) > 10000 ||
+            Number(el.scrollHeight || 0) > 10000 ||
+            Number(el.offsetHeight || 0) > 10000;
+          var largerThanLive = !!liveMeasurement && (
+            Number(rect.height || 0) >
+              Number(liveMeasurement.rectHeight || 0) + minimumExcess ||
+            Number(el.offsetHeight || 0) >
+              Number(liveMeasurement.offsetHeight || 0) + minimumExcess
+          );
+          var largerThanExpected =
+            Number(rect.height || 0) > liveExpectedHeight + minimumExcess ||
+            Number(el.offsetHeight || 0) > liveExpectedHeight + minimumExcess;
+          var oversized = largerThanLive || largerThanExpected;
+          var positioned =
+            position === 'fixed' ||
+            position === 'sticky' ||
+            position === 'absolute';
+          var transformed = transform && transform !== 'none';
+          var painted =
+            backgroundImage && backgroundImage !== 'none' ||
+            maskImage && maskImage !== 'none';
+          var meaningfulPositioned =
+            positioned &&
+            (
+              Number(rect.width || 0) > 256 ||
+              Number(rect.height || 0) > 256 ||
+              farBelow ||
+              oversized ||
+              painted ||
+              transformed
+            );
+          if (id) {
+            ids[id] = Number(ids[id] || 0) + 1;
+          }
+
+          if (
+            meaningfulPositioned ||
+            transformed ||
+            farBelow ||
+            oversized ||
+            painted
+          ) {
+            suspicious.push({
+              label: elementLabel(el),
+              id: id || null,
+              position: position,
+              transform: transform,
+              top: Math.round(Number(rect.top || 0)),
+              bottom: Math.round(Number(rect.bottom || 0)),
+              width: Math.round(Number(rect.width || 0)),
+              height: Math.round(Number(rect.height || 0)),
+              scrollHeight: Number(el.scrollHeight || 0),
+              clientHeight: Number(el.clientHeight || 0),
+              offsetHeight: Number(el.offsetHeight || 0),
+              backgroundImage:
+                backgroundImage === 'none'
+                  ? ''
+                  : backgroundImage.slice(0, 240),
+              maskImage:
+                maskImage === 'none'
+                  ? ''
+                  : maskImage.slice(0, 240),
+              farBelow: farBelow,
+              oversized: oversized,
+              largeAbsolute: largeAbsolute,
+              largerThanLive: largerThanLive,
+              largerThanExpected: largerThanExpected
+            });
+          }
+        } catch (e) {}
+      });
+
+      var largestDescendants = [];
+      Array.from(root.querySelectorAll('*')).forEach(function (el) {
+        try {
+          var currentMeasurement = measureDiagnosticElement(
+            el,
+            root,
+            targetSelectors
+          );
+          var liveMeasurement = baselineByElement
+            ? baselineByElement.get(el)
+            : null;
+          var rowOwner = findDiagnosticRowOwner(el, diagnosticRowElements);
+          largestDescendants.push({
+            label: currentMeasurement.label,
+            tagName: currentMeasurement.tagName,
+            id: currentMeasurement.id,
+            className: currentMeasurement.className,
+            parentLabel: currentMeasurement.parentLabel,
+            parentId: currentMeasurement.parentId,
+            childIndex: currentMeasurement.childIndex,
+            siblingCount: currentMeasurement.siblingCount,
+            depthFromRoot: currentMeasurement.depthFromRoot,
+            directChildOfRoot: currentMeasurement.directChildOfRoot,
+            rowIndex: rowOwner ? rowOwner.index : null,
+            rowLabel: rowOwner ? elementLabel(rowOwner.row) : null,
+            rowId: rowOwner && rowOwner.row.id ? String(rowOwner.row.id) : null,
+            rectHeight: currentMeasurement.rectHeight,
+            scrollHeight: currentMeasurement.scrollHeight,
+            clientHeight: currentMeasurement.clientHeight,
+            offsetHeight: currentMeasurement.offsetHeight,
+            liveRectHeight: liveMeasurement
+              ? liveMeasurement.rectHeight
+              : null,
+            liveScrollHeight: liveMeasurement
+              ? liveMeasurement.scrollHeight
+              : null,
+            liveOffsetHeight: liveMeasurement
+              ? liveMeasurement.offsetHeight
+              : null,
+            rectHeightDelta: liveMeasurement
+              ? currentMeasurement.rectHeight - liveMeasurement.rectHeight
+              : null,
+            scrollHeightDelta: liveMeasurement
+              ? currentMeasurement.scrollHeight - liveMeasurement.scrollHeight
+              : null,
+            offsetHeightDelta: liveMeasurement
+              ? currentMeasurement.offsetHeight - liveMeasurement.offsetHeight
+              : null,
+            matchedTargetSelectors:
+              currentMeasurement.matchedTargetSelectors,
+            insideTargetSelectors:
+              currentMeasurement.insideTargetSelectors,
+            isIframe: currentMeasurement.isIframe,
+            styleChanges: diagnosticStyleChanges(liveMeasurement, currentMeasurement)
+          });
+        } catch (e) {}
+      });
+      largestDescendants.sort(function (a, b) {
+        var heightDifference =
+          Number(b.offsetHeight || 0) - Number(a.offsetHeight || 0);
+        if (heightDifference) return heightDifference;
+        return Number(b.offsetHeightDelta || 0) -
+          Number(a.offsetHeightDelta || 0);
+      });
+
+      var largestGrowthDescendants = largestDescendants.slice();
+      largestGrowthDescendants.sort(function (a, b) {
+        var aDelta = a.offsetHeightDelta;
+        var bDelta = b.offsetHeightDelta;
+        if (aDelta === null && bDelta === null) return 0;
+        if (aDelta === null) return 1;
+        if (bDelta === null) return -1;
+        var deltaDifference = Number(bDelta || 0) - Number(aDelta || 0);
+        if (deltaDifference) return deltaDifference;
+        return Number(b.offsetHeight || 0) - Number(a.offsetHeight || 0);
+      });
+      Object.keys(ids).forEach(function (id) {
+        if (ids[id] > 1) {
+          duplicateIds[id] = ids[id];
+        }
+      });
+      var ancestors = [];
+      var ancestor = root;
+      while (ancestor) {
+        try {
+          var ancestorStyle = getComputedStyle(ancestor);
+          var ancestorRect = ancestor.getBoundingClientRect();
+          var beforeStyle = getComputedStyle(ancestor, '::before');
+          var afterStyle = getComputedStyle(ancestor, '::after');
+          ancestors.push({
+            label: elementLabel(ancestor),
+            display: String(ancestorStyle.display || ''),
+            position: String(ancestorStyle.position || ''),
+            overflow: String(ancestorStyle.overflow || ''),
+            overflowY: String(ancestorStyle.overflowY || ''),
+            height: String(ancestorStyle.height || ''),
+            minHeight: String(ancestorStyle.minHeight || ''),
+            maxHeight: String(ancestorStyle.maxHeight || ''),
+            blockSize: String(ancestorStyle.blockSize || ''),
+            minBlockSize: String(ancestorStyle.minBlockSize || ''),
+            maxBlockSize: String(ancestorStyle.maxBlockSize || ''),
+            contain: String(ancestorStyle.contain || ''),
+            contentVisibility: String(ancestorStyle.contentVisibility || ''),
+            top: Math.round(Number(ancestorRect.top || 0)),
+            bottom: Math.round(Number(ancestorRect.bottom || 0)),
+            rectHeight: Math.round(Number(ancestorRect.height || 0)),
+            scrollHeight: Number(ancestor.scrollHeight || 0),
+            clientHeight: Number(ancestor.clientHeight || 0),
+            offsetHeight: Number(ancestor.offsetHeight || 0),
+            before: {
+              content: String(beforeStyle.content || ''),
+              display: String(beforeStyle.display || ''),
+              position: String(beforeStyle.position || ''),
+              height: String(beforeStyle.height || ''),
+              minHeight: String(beforeStyle.minHeight || ''),
+              backgroundImage: String(beforeStyle.backgroundImage || '')
+            },
+            after: {
+              content: String(afterStyle.content || ''),
+              display: String(afterStyle.display || ''),
+              position: String(afterStyle.position || ''),
+              height: String(afterStyle.height || ''),
+              minHeight: String(afterStyle.minHeight || ''),
+              backgroundImage: String(afterStyle.backgroundImage || '')
+            }
+          });
+        } catch (e) {}
+        ancestor = ancestor.parentElement;
+      }
+      suspicious.sort(function (a, b) {
+        if (a.farBelow !== b.farBelow) return a.farBelow ? -1 : 1;
+        if (a.oversized !== b.oversized) return a.oversized ? -1 : 1;
+        return Math.max(
+          b.bottom,
+          b.height,
+          b.scrollHeight
+        ) - Math.max(
+          a.bottom,
+          a.height,
+          a.scrollHeight
+        );
+      });
+
+      return {
+        ok: true,
+        root: {
+          label: elementLabel(root),
+          top: Math.round(rootTop),
+          bottom: Math.round(rootBottom),
+          rectHeight: Math.round(Number(rootRect.height || 0)),
+          scrollHeight: Number(root.scrollHeight || 0),
+          clientHeight: Number(root.clientHeight || 0),
+          offsetHeight: Number(root.offsetHeight || 0),
+          expectedHeight: expectedHeight,
+          liveExpectedHeight: Math.round(liveExpectedHeight),
+          expectedBottom: Math.round(expectedBottom),
+          currentBottom: Math.round(rootBottom),
+          excessHeight: Math.max(0, Math.round(rootRect.height - liveExpectedHeight))
+        },
+        document: {
+          scrollHeight: Number(
+            document.documentElement &&
+            document.documentElement.scrollHeight || 0
+          ),
+          bodyScrollHeight: Number(
+            document.body &&
+            document.body.scrollHeight || 0
+          ),
+          htmlRectHeight: Math.round(Number(
+            document.documentElement.getBoundingClientRect().height || 0
+          )),
+          bodyRectHeight: Math.round(Number(
+            document.body.getBoundingClientRect().height || 0
+          )),
+          htmlMinHeight: String(
+            getComputedStyle(document.documentElement).minHeight || ''
+          ),
+          bodyMinHeight: String(
+            getComputedStyle(document.body).minHeight || ''
+          )
+        },
+        baseline: pdfLayoutBaseline && pdfLayoutBaseline.root === root
+          ? {
+              elementCount: pdfLayoutBaseline.byElement.size,
+              targetSelectors: targetSelectors,
+              root: pdfLayoutBaseline.rootMeasurement
+            }
+          : null,
+        largestDescendants: largestDescendants.slice(
+          0,
+          topDescendantLimit
+        ),
+        largestGrowthDescendants: largestGrowthDescendants.slice(
+          0,
+          topGrowthLimit
+        ),
+        conversationSummary: rowReport.summary,
+        conversationRows: rowReport.rows,
+        ancestors: ancestors,
+        duplicateIds: duplicateIds,
+        suspiciousCount: suspicious.length,
+        suspicious: suspicious.slice(0, limit)
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        error: String((e && e.message) || e)
+      };
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Dynamic width helpers
   //
@@ -2327,8 +3576,13 @@ function waitForPrintableAssets(options) {
       setTargetVW: setTargetVW,
       seedTargetVW: seedTargetVW,
       startVWResize: startVWResize,
+      capturePdfLayoutBaseline: capturePdfLayoutBaseline,
+      capturePdfLayoutStage: capturePdfLayoutStage,
+      armPdfBeforePrintDiagnostic: armPdfBeforePrintDiagnostic,
+      getPdfBeforePrintDiagnostic: getPdfBeforePrintDiagnostic,
       stopVWResize: stopVWResize,
-      waitForPrintableAssets: waitForPrintableAssets
+      waitForPrintableAssets: waitForPrintableAssets,
+      diagnosePdfLayout: diagnosePdfLayout
     }),
     writable: false,
     configurable: true,
