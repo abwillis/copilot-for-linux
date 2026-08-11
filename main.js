@@ -39,6 +39,7 @@ const {
   DOM_COLLECTION_ROW_SELECTORS,
   DOM_COLLECTION_EXCLUDE_SELECTORS,
   CHAT_INPUT_SELECTORS,
+  REASONING_EXPAND_SELECTORS,
 } = require('./lib/chat-dom');
 
 const {
@@ -101,6 +102,7 @@ function getRendererAgentBoot() {
       collectionRowSelectors: DOM_COLLECTION_ROW_SELECTORS,
       collectionExcludeSelectors: DOM_COLLECTION_EXCLUDE_SELECTORS,
       chatInputSelectors: CHAT_INPUT_SELECTORS,
+      reasoningExpandSelectors: REASONING_EXPAND_SELECTORS,
       dynamicWidthCssVar:    APP_DYNAMIC_WIDTH?.cssVar    || '',
       dynamicWidthMinVw:     APP_DYNAMIC_WIDTH?.minVw     ?? 0,
       dynamicWidthMaxVw:     APP_DYNAMIC_WIDTH?.maxVw     ?? 100,
@@ -153,7 +155,14 @@ function installRendererAgent(webContents) {
     } catch {}
   });
 }
-app.on('web-contents-created', (_event, wc) => { installRendererAgent(wc); });
+app.on('web-contents-created', (_event, wc) => {
+  installRendererAgent(wc);
+  // Mirror renderer-side console output into the renderer log file. Attaching
+  // here catches every webContents (main window, quick chat, find modal, and
+  // the offscreen print windows) from one place. runtimeConfig is defined below
+  // in module scope; this callback only ever runs after module evaluation.
+  try { runtimeConfig.attachRendererConsoleCapture(wc, 'renderer'); } catch {}
+});
 
 // ============================================================================
 // App identity & constants
@@ -196,8 +205,12 @@ const {
   sanitizeLogFileName,
   getConfigFilePath,
   getLogFilePath,
+  getRendererLogFilePath,
   formatConsoleArg,
   appendConsoleLogToFile,
+  appendRendererLogToFile,
+  attachRendererConsoleCapture,
+  logVerbose,
   makeConsoleMethod,
   applyConsoleLoggingConfig,
   normalizeBooleanConfig,
@@ -368,6 +381,7 @@ function initExporters() {
     getAppConfig,
     DEFAULT_APP_CONFIG,
     normalizeExportFormat,
+    logVerbose,
     appLabel: APP_LABEL,
     appSlug: APP_SLUG,
     rendererApiGlobal: RENDERER_API_GLOBAL,
@@ -384,6 +398,7 @@ async function getSelectionFragment(...args) { return initExporters().getSelecti
 async function getSelectionFragmentRaw(...args) { return initExporters().getSelectionFragmentRaw(...args); }
 async function buildSelectionMarkdownForExport(...args) { return initExporters().buildSelectionMarkdownForExport(...args); }
 async function selectChatPane(...args) { return initExporters().selectChatPane(...args); }
+async function expandChatPane(...args) { return initExporters().expandChatPane(...args); }
 async function promptSaveChatPane(...args) { return initExporters().promptSaveChatPane(...args); }
 async function saveSelectionAsMarkdown(...args) { return initExporters().saveSelectionAsMarkdown(...args); }
 async function saveSelectionAsCleanMarkdown(...args) { return initExporters().saveSelectionAsCleanMarkdown(...args); }
@@ -512,7 +527,7 @@ function initAppMenu() {
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage,
     buildExportProfileMenuTemplate, promptExportWithProfile,
-    selectChatPane, promptSaveChatPane, printChatPane, printSelection, saveSelectionAsMarkdown, EXPORT_SCOPES,
+    selectChatPane, expandChatPane, promptSaveChatPane, printChatPane, printSelection, saveSelectionAsMarkdown, EXPORT_SCOPES,
     buildQuickChatManagerMenuTemplate, installQuickChatMenu, refreshQuickChatMenu,
     createQuickChatWindow, buildSendToQuickSubmenu, SEND_MODE,
     ensureSaveState,

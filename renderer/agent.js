@@ -76,6 +76,7 @@
   var DOM_COLLECTION_KEY_ATTRIBUTES = [];
   var DOM_COLLECTION_ROW_SELECTORS = [];
   var DOM_COLLECTION_EXCLUDE_SELECTORS = [];
+  var REASONING_EXPAND_SELECTORS = [];
   var DOM_SCORE_VISIBLE = 1000;
   var DOM_SCORE_TEXT_MAX = 500;
 
@@ -1157,6 +1158,108 @@
     }
   }
 
+  // Capture coarse document-size and renderer-memory information immediately
+  // before native PDF generation. Unlike the detailed layout diagnostics,
+  // this intentionally avoids walking and measuring every descendant. It is
+  // meant to establish whether a failed print was operating on an unusually
+  // large document or under renderer heap pressure.
+  function capturePdfResourceDiagnostic(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    try {
+      var root = getPdfTargetPane(fallbackSelector);
+      if (!root) {
+        return {
+          ok: false,
+          stage: String(opts.stage || ''),
+          error: 'chat pane not found'
+        };
+      }
+
+      var html = document.documentElement;
+      var body = document.body;
+      var rootRect = root.getBoundingClientRect();
+      var bodyTextLength = null;
+      var rootTextLength = null;
+      var documentNodeCount = null;
+      var rootNodeCount = null;
+
+      try {
+        bodyTextLength = String(
+          body && (body.innerText || body.textContent) || ''
+        ).length;
+      } catch (e) {}
+
+      try {
+        rootTextLength = String(
+          root.innerText || root.textContent || ''
+        ).length;
+      } catch (e) {}
+
+      try {
+        documentNodeCount = document.querySelectorAll('*').length;
+      } catch (e) {}
+
+      try {
+        rootNodeCount = root.querySelectorAll('*').length;
+      } catch (e) {}
+
+      var rendererMemory = {
+        available: false,
+        usedJSHeapSize: null,
+        totalJSHeapSize: null,
+        jsHeapSizeLimit: null
+      };
+
+      try {
+        var memory = window.performance && window.performance.memory;
+        if (memory) {
+          rendererMemory = {
+            available: true,
+            usedJSHeapSize: Number(memory.usedJSHeapSize || 0),
+            totalJSHeapSize: Number(memory.totalJSHeapSize || 0),
+            jsHeapSizeLimit: Number(memory.jsHeapSizeLimit || 0)
+          };
+        }
+      } catch (e) {}
+
+      return {
+        ok: true,
+        diagnosticVersion: 1,
+        stage: String(opts.stage || ''),
+        capturedAt: new Date().toISOString(),
+        document: {
+          readyState: String(document.readyState || ''),
+          visibilityState: String(document.visibilityState || ''),
+          htmlScrollHeight: Number(html && html.scrollHeight || 0),
+          htmlClientHeight: Number(html && html.clientHeight || 0),
+          htmlOffsetHeight: Number(html && html.offsetHeight || 0),
+          bodyScrollHeight: Number(body && body.scrollHeight || 0),
+          bodyClientHeight: Number(body && body.clientHeight || 0),
+          bodyOffsetHeight: Number(body && body.offsetHeight || 0),
+          bodyTextLength: bodyTextLength,
+          nodeCount: documentNodeCount
+        },
+        root: {
+          label: elementLabel(root),
+          rectHeight: Math.round(Number(rootRect.height || 0)),
+          scrollHeight: Number(root.scrollHeight || 0),
+          clientHeight: Number(root.clientHeight || 0),
+          offsetHeight: Number(root.offsetHeight || 0),
+          textLength: rootTextLength,
+          nodeCount: rootNodeCount
+        },
+        rendererMemory: rendererMemory
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        stage: String(opts.stage || ''),
+        error: String((e && e.message) || e)
+      };
+    }
+  }
+
   function capturePdfTerminalContent(root, targetSelectors) {
     var errors = [];
     try {
@@ -2087,6 +2190,30 @@
   // -------------------------------------------------------------------------
   function expandForPrint(options) {
     var opts = options || {};
+    // When true, leave chain-of-thought reasoning controls alone so the
+    // dedicated expandReasoningForPrint() pass can handle them.
+    //
+    // WHY: this function's allow-list matches any class containing "expand",
+    // and the reasoning control's class is scc-ChainOfThought__expandButton, so
+    // it clicks those open as a side effect. Because
+    // REASONING_EXPAND_SELECTORS only match [aria-expanded="false"],
+    // expandReasoningForPrint then finds nothing to do -- observed as
+    // "found: 0, clicked: 0" -- and its per-panel capture and materialization
+    // machinery never runs. Opening a panel is not the same as rendering its
+    // body, so the export ends up with reasoning headlines and no content.
+    //
+    // Defaults to FALSE so existing callers are unchanged. Only callers that
+    // are certain to run expandReasoningForPrint afterwards pass true;
+    // otherwise skipping here would mean reasoning is never expanded at all.
+    var skipReasoning = !!opts.skipReasoning;
+    var reasoningSel = skipReasoning
+      ? safeSelectorList(REASONING_EXPAND_SELECTORS)
+      : '';
+    function isReasoningControl(el) {
+      if (!reasoningSel) return false;
+      try { return !!(el && el.matches && el.matches(reasoningSel)); }
+      catch (e) { return false; }
+    }
     var root = null;
     try {
       root = document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]');
@@ -2157,12 +2284,17 @@
           btn.textContent ||
           ''
         ).trim().toLowerCase();
-        if (/^show more$|^see more$|^read more$|^show all$|^expand$/.test(label)) return true;
+          if (
+            /^show more$|^see more$|^read more$|^show all$|^expand$/.test(label) ||
+            /^(?:copilot\s+)?reasoning completed in \d+ steps?[!.]?$/.test(label)
+          ) {
+            return true;
+          }
       } catch (e) {}
       return false;
     }
 
-    var details = 0, ariaButtons = 0, dataState = 0, skipped = 0, rolledBack = 0;
+    var details = 0, ariaButtons = 0, dataState = 0, skipped = 0, rolledBack = 0, reasoningSkipped = 0;
     var opened = []; // for rollback on menu detection
 
     // 1) <details> -- always safe, never opens a portal.
@@ -2178,6 +2310,7 @@
       var btns = root.querySelectorAll('[aria-expanded="false"]');
       for (var j = 0; j < btns.length; j++) {
         var b = btns[j];
+        if (isReasoningControl(b)) { reasoningSkipped++; continue; }
         if (looksLikeMenuTrigger(b)) { skipped++; continue; }
         if (!looksLikeContentDisclosure(b)) { skipped++; continue; }
         try {
@@ -2237,6 +2370,7 @@
       ariaButtons: ariaButtons - (newMenu ? rolledBack : 0),
       dataState: dataState,
       skipped: skipped,
+      reasoningSkipped: reasoningSkipped,
       rolledBack: rolledBack,
       menuDetected: !!newMenu
     };
@@ -2666,6 +2800,11 @@
     }
     if (Array.isArray(c.collectionExcludeSelectors)) {
       DOM_COLLECTION_EXCLUDE_SELECTORS = c.collectionExcludeSelectors
+        .map(function (selector) { return String(selector || '').trim(); })
+        .filter(Boolean);
+    }
+    if (Array.isArray(c.reasoningExpandSelectors)) {
+      REASONING_EXPAND_SELECTORS = c.reasoningExpandSelectors
         .map(function (selector) { return String(selector || '').trim(); })
         .filter(Boolean);
     }
@@ -3554,6 +3693,1030 @@ function waitForPrintableAssets(options) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Conversation export diagnostic.
+  //
+  // Purpose: answer two questions with runtime DOM facts instead of inference.
+  //
+  //   PRIMARY  -- Why are Copilot (assistant) responses missing from the PDF?
+  //     Enumerates the conversation rows (reusing getDiagnosticRows so it sees
+  //     exactly what the exporter's other diagnostics see), classifies each as
+  //     user / assistant / mixed / unknown, and records connectivity, geometry
+  //     and the styles that can suppress content (display, visibility, opacity,
+  //     content-visibility, contain, max-height, overflow) plus a text preview.
+  //     Run at several export stages, the per-stage assistantSummary shows the
+  //     exact stage at which assistant rows vanish, collapse to zero height,
+  //     are hidden, or are disconnected from the DOM.
+  //
+  //   SECONDARY -- Why does "Reasoning completed in N steps" not expand?
+  //     Dumps every reasoning control's full attribute set and resolves its
+  //     aria-controls target, reporting whether that target exists, is
+  //     connected, and has rendered text. A missing/empty target means the
+  //     body is lazy-rendered (a click is required; CSS cannot reveal it); a
+  //     present-but-hidden target means CSS/allow-list can reveal it.
+  //
+  // This is read-only. It mutates nothing and never clicks. Classification is
+  // derived from the caller-configured DOM_COLLECTION_SELECTORS (by keyword),
+  // so it introduces no new app-specific fingerprints into the shared agent.
+  // -------------------------------------------------------------------------
+  function capturePdfConversationDiagnostic(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    var stage = String(opts.stage || '');
+    var maxRows = Number(opts.maxRows || 300);
+    var previewLen = Number(opts.previewLen || 180);
+    var maxReasoningPerRow = Number(opts.maxReasoningPerRow || 6);
+    // Marker separating a turn's user text from the assistant's answer.
+    // Caller-supplied so this shared file stays project-neutral.
+    var answerMarker = String(opts.answerMarker || 'Copilot said:');
+
+    try {
+      var root = getPdfTargetPane(fallbackSelector);
+      if (!root) return { ok: false, stage: stage, error: 'chat pane not found' };
+
+      // Split the configured collection selectors into role hints by keyword.
+      var userHints = [];
+      var assistantHints = [];
+      try {
+        for (var s = 0; s < DOM_COLLECTION_SELECTORS.length; s++) {
+          var sel = String(DOM_COLLECTION_SELECTORS[s] || '');
+          if (/user/i.test(sel)) userHints.push(sel);
+          if (/assistant|copilot|answer/i.test(sel)) assistantHints.push(sel);
+        }
+      } catch (e) {}
+
+      function matchesAny(el, list) {
+        for (var i = 0; i < list.length; i++) {
+          try {
+            if (el.matches && el.matches(list[i])) return true;
+            if (el.querySelector && el.querySelector(list[i])) return true;
+          } catch (e) {}
+        }
+        return false;
+      }
+      function guessRole(el) {
+        var u = matchesAny(el, userHints);
+        var a = matchesAny(el, assistantHints);
+        if (u && a) return 'mixed';
+        if (u) return 'user';
+        if (a) return 'assistant';
+        return 'unknown';
+      }
+
+      function dumpAttributes(el) {
+        var out = {};
+        try {
+          for (var i = 0; i < el.attributes.length; i++) {
+            var at = el.attributes[i];
+            out[at.name] = String(at.value || '').slice(0, 160);
+          }
+        } catch (e) {}
+        return out;
+      }
+
+      function describeControlledRegion(el) {
+        try {
+          var controls = el.getAttribute && el.getAttribute('aria-controls');
+          if (!controls) return null;
+          var firstId = String(controls).split(/\s+/).filter(Boolean)[0];
+          if (!firstId) return null;
+          var target = document.getElementById(firstId);
+          if (!target) {
+            return { id: firstId, exists: false };
+          }
+          var trect = null;
+          try { trect = target.getBoundingClientRect(); } catch (e) {}
+          var ttext = '';
+          try { ttext = String(target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) {}
+          var tcs = null;
+          try { tcs = getComputedStyle(target); } catch (e) {}
+          return {
+            id: firstId,
+            exists: true,
+            isConnected: !!target.isConnected,
+            insideRoot: !!(root.contains && root.contains(target)),
+            rectHeight: trect ? Math.round(trect.height) : 0,
+            textLength: ttext.length,
+            display: tcs ? String(tcs.display) : '',
+            visibility: tcs ? String(tcs.visibility) : '',
+            contentVisibility: tcs ? String(tcs.contentVisibility) : '',
+            ariaHidden: target.getAttribute ? target.getAttribute('aria-hidden') : null,
+            hiddenAttr: !!(target.hasAttribute && target.hasAttribute('hidden')),
+            dataState: target.getAttribute ? target.getAttribute('data-state') : null
+          };
+        } catch (e) {
+          return { error: String((e && e.message) || e) };
+        }
+      }
+
+      // Find reasoning controls within a scope. A control is a candidate if its
+      // class mentions "reasoning", or its (short) visible text/aria-label looks
+      // like a reasoning twisty ("reasoning", "completed in N steps",
+      // "thought/thinking"). Read-only; we never click here.
+      var reasoningTextRe = /reasoning|thought|thinking|completed in\s*\d+\s*steps?/i;
+      function scanReasoningControls(scope) {
+        var results = [];
+        try {
+          var pool = scope.querySelectorAll(
+            '[class*="Reasoning" i],[class*="reasoning" i],' +
+            '[aria-expanded],[data-state],button,[role="button"],summary'
+          );
+          for (var i = 0; i < pool.length && results.length < maxReasoningPerRow; i++) {
+            var el = pool[i];
+            var cls = '';
+            try { cls = String(el.className || ''); } catch (e) {}
+            var label = '';
+            try {
+              label = String(
+                (el.getAttribute && el.getAttribute('aria-label')) ||
+                el.innerText || el.textContent || ''
+              ).replace(/\s+/g, ' ').trim();
+            } catch (e) {}
+            var isReasoning = /reasoning/i.test(cls) ||
+              (label.length <= 80 && reasoningTextRe.test(label));
+            if (!isReasoning) continue;
+            results.push({
+              label: elementLabel(el),
+              tagName: String(el.tagName || '').toLowerCase(),
+              text: label.slice(0, previewLen),
+              attributes: dumpAttributes(el),
+              controlledRegion: describeControlledRegion(el)
+            });
+          }
+        } catch (e) {}
+        return results;
+      }
+
+      var rowEls = getDiagnosticRows(root);
+      var rows = [];
+      var summary = {
+        assistantVisible: 0,
+        assistantZeroHeight: 0,
+        assistantHidden: 0,
+        assistantDisconnected: 0,
+        assistantEmptyText: 0,
+        userVisible: 0,
+        unknownVisible: 0
+      };
+
+      // ANSWER-BODY measurement: the text AFTER the last answer marker, with
+      // the bare assistant name and the "Sources" chip label removed, so an
+      // unanswered turn scores ~0.
+      //
+      // WHY: the row-level textLength cannot tell whether an answer exists.
+      // Each row is a whole turn wrapper, and in this workload the user's
+      // pasted logs/code dominate it -- so every row measured as "populated"
+      // (assistantVisible: 45, assistantEmptyText: 0) while every answer body
+      // was in fact empty. That false signal hid the real failure repeatedly.
+      //
+      // The SOURCE matters as much as the slice. innerText is CSS-aware: it
+      // omits text hidden by content-visibility/display, but only returns ''
+      // for a row when the whole row is hidden. A row holding visible user
+      // text therefore yields non-empty innerText even when the answer subtree
+      // is suppressed. textContent ignores CSS entirely.
+      //
+      // Measuring both separates two failure modes needing OPPOSITE fixes:
+      //   contentLen ~0, innerLen ~0    -> answer is NOT in the DOM
+      //                                    (needs rendering/materialization)
+      //   contentLen large, innerLen ~0 -> answer IS in the DOM but hidden
+      //                                    (needs a CSS/visibility override)
+      function answerBodyOf(el) {
+        function bodyFrom(raw) {
+          var t = String(raw || '').replace(/\s+/g, ' ').trim();
+          var idx = t.lastIndexOf(answerMarker);
+          if (idx < 0) return { present: false, len: 0, preview: '' };
+          var after = t.slice(idx + answerMarker.length).trim();
+          after = after.replace(/^copilot\b/i, '').trim();
+          after = after.replace(/\bsources\b/gi, '').trim();
+          return { present: true, len: after.length, preview: after.slice(0, previewLen) };
+        }
+        var c = { present: false, len: 0, preview: '' };
+        var i = { present: false, len: 0, preview: '' };
+        try { c = bodyFrom(el.textContent); } catch (e) {}
+        try { i = bodyFrom(el.innerText); } catch (e) {}
+        return {
+          hasMarker: c.present || i.present,
+          contentLen: c.len,
+          innerLen: i.len,
+          hiddenChars: Math.max(0, c.len - i.len),
+          preview: c.preview || i.preview
+        };
+      }
+
+      var answerStats = {
+        turnsWithMarker: 0,
+        answersPresent: 0,
+        answersEmpty: 0,
+        answersHiddenByCss: 0,
+        totalAnswerChars: 0,
+        totalHiddenChars: 0
+      };
+
+      for (var r = 0; r < rowEls.length && r < maxRows; r++) {
+        var el2 = rowEls[r];
+        var cs2 = null;
+        try { cs2 = getComputedStyle(el2); } catch (e) {}
+        var rect2 = null;
+        try { rect2 = el2.getBoundingClientRect(); } catch (e) {}
+        var txt2 = '';
+        try { txt2 = String(el2.innerText || el2.textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) {}
+        var body2 = answerBodyOf(el2);
+        var role = guessRole(el2);
+        var rectH = rect2 ? Math.round(rect2.height) : 0;
+        var display2 = cs2 ? String(cs2.display) : '';
+        var visibility2 = cs2 ? String(cs2.visibility) : '';
+        var opacity2 = cs2 ? String(cs2.opacity) : '';
+        var hiddenLike =
+          display2 === 'none' ||
+          visibility2 === 'hidden' ||
+          (cs2 && Number(cs2.opacity) === 0);
+
+        rows.push({
+          index: r,
+          role: role,
+          label: elementLabel(el2),
+          isConnected: !!el2.isConnected,
+          rectHeight: rectH,
+          offsetHeight: Number(el2.offsetHeight || 0),
+          scrollHeight: Number(el2.scrollHeight || 0),
+          display: display2,
+          visibility: visibility2,
+          opacity: opacity2,
+          contentVisibility: cs2 ? String(cs2.contentVisibility) : '',
+          contain: cs2 ? String(cs2.contain) : '',
+          maxHeight: cs2 ? String(cs2.maxHeight) : '',
+          overflow: cs2 ? String(cs2.overflow) : '',
+          textLength: txt2.length,
+          textHead: txt2.slice(0, previewLen),
+          textTail: txt2.slice(-previewLen),
+          // Answer-body measurements. answerLen is the CSS-independent truth;
+          // answerVisibleLen is what CSS currently exposes; the difference is
+          // text present in the DOM but suppressed from rendering.
+          hasAnswerMarker: body2.hasMarker,
+          answerLen: body2.contentLen,
+          answerVisibleLen: body2.innerLen,
+          answerHiddenChars: body2.hiddenChars,
+          answerPreview: body2.preview,
+          reasoningControls: scanReasoningControls(el2)
+        });
+
+        if (body2.hasMarker) {
+          answerStats.turnsWithMarker++;
+          answerStats.totalAnswerChars += body2.contentLen;
+          answerStats.totalHiddenChars += body2.hiddenChars;
+          if (body2.contentLen < 40) answerStats.answersEmpty++;
+          else answerStats.answersPresent++;
+          if (body2.hiddenChars > 40) answerStats.answersHiddenByCss++;
+        }
+
+        if (role === 'assistant' || role === 'mixed') {
+          if (!el2.isConnected) summary.assistantDisconnected++;
+          else if (hiddenLike) summary.assistantHidden++;
+          else if (rectH < 4) summary.assistantZeroHeight++;
+          else if (txt2.length < 2) summary.assistantEmptyText++;
+          else summary.assistantVisible++;
+        } else if (role === 'user') {
+          if (el2.isConnected && !hiddenLike && rectH >= 4) summary.userVisible++;
+        } else {
+          if (el2.isConnected && !hiddenLike && rectH >= 4) summary.unknownVisible++;
+        }
+      }
+
+      return {
+        ok: true,
+        stage: stage,
+        rootLabel: elementLabel(root),
+        answerMarker: answerMarker,
+        answerStats: answerStats,
+        userHints: userHints,
+        assistantHints: assistantHints,
+        rowCount: rowEls.length,
+        reported: rows.length,
+        assistantSummary: summary,
+        rows: rows
+      };
+    } catch (e) {
+      return { ok: false, stage: stage, error: String((e && e.message) || e) };
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Expand chain-of-thought / reasoning panels for export.
+  //
+  // WHY THIS EXISTS SEPARATELY FROM expandForPrint():
+  // The "Reasoning completed in N steps" control collapses the model's
+  // reasoning by default. expandForPrint() only clicks controls mounted at the
+  // moment it runs; the Fluent virtualizer keeps just a few rows mounted, so
+  // off-screen reasoning panels are never opened. This method is intended to
+  // run AFTER pdfPrepare() has flattened the virtualizer -- at that point every
+  // row is mounted, so a single sweep can open all reasoning panels.
+  //
+  // It clicks ONLY controls matching the app-configured
+  // REASONING_EXPAND_SELECTORS (populated by init() from lib/chat-dom.js), so
+  // no Copilot/Gemini/Grok DOM fingerprint lives in this shared file. Reasoning
+  // panels expand inline (they are not portal menus); as a defence-in-depth
+  // measure, if a click unexpectedly opens a role=menu/dialog/listbox we send
+  // Escape. Read-only otherwise: it does not edit content.
+  //
+  // Returns counts plus a coarse before/after root text length so the caller's
+  // log shows whether expansion actually revealed additional content (useful
+  // if the reasoning body turns out to be lazily rendered).
+  // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Expansion cancellation (Escape key)
+  //
+  // Expanding a long conversation can take a minute or more, and it runs as one
+  // long renderer-side loop. These give the user a way out: beginExpandCancel()
+  // installs a capture-phase keydown listener that sets a flag; the expansion
+  // loops check that flag every iteration and stop cleanly, keeping whatever
+  // was already expanded and captured. endExpandCancel() always removes the
+  // listener so it cannot leak into normal typing.
+  //
+  // The listener is capture-phase and on window so it sees Escape before the
+  // hosted web app can swallow it. It does NOT preventDefault: cancelling the
+  // expansion should not also break the app's own Escape handling.
+  // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Expansion progress overlay
+  //
+  // Expanding a long conversation can take a minute or more with no visible
+  // sign that anything is happening. This draws a small fixed-position banner
+  // in the page reporting the current phase and per-panel progress, and telling
+  // the user that Escape cancels.
+  //
+  // It lives in the renderer because the expansion loop runs there: the main
+  // process is blocked awaiting a single callRA() and cannot report progress
+  // mid-flight. Updating a DOM node directly from the loop needs no IPC.
+  //
+  // The node is tagged data-app-expand-overlay and pointer-events:none so it
+  // cannot intercept clicks, and it is always removed when expansion ends, so
+  // it can never appear in an export.
+  // -------------------------------------------------------------------------
+  var expandOverlayEl = null;
+
+  function showExpandOverlay(text) {
+    try {
+      if (!expandOverlayEl || !expandOverlayEl.isConnected) {
+        expandOverlayEl = document.createElement('div');
+        expandOverlayEl.setAttribute('data-app-expand-overlay', '1');
+        expandOverlayEl.setAttribute('aria-live', 'polite');
+        expandOverlayEl.style.cssText = [
+          'position:fixed',
+          'top:16px',
+          'left:50%',
+          'transform:translateX(-50%)',
+          'z-index:2147483647',
+          'background:rgba(20,20,20,0.92)',
+          'color:#fff',
+          'font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif',
+          'padding:10px 16px',
+          'border-radius:8px',
+          'border:1px solid rgba(255,255,255,0.18)',
+          'box-shadow:0 4px 16px rgba(0,0,0,0.45)',
+          'pointer-events:none',
+          'white-space:pre-line',
+          'text-align:center',
+          'max-width:80vw'
+        ].join(';');
+        (document.body || document.documentElement).appendChild(expandOverlayEl);
+      }
+      expandOverlayEl.textContent = String(text || '');
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function hideExpandOverlay() {
+    try {
+      if (expandOverlayEl && expandOverlayEl.parentNode) {
+        expandOverlayEl.parentNode.removeChild(expandOverlayEl);
+      }
+    } catch (e) {}
+    expandOverlayEl = null;
+    // Belt and braces: remove any stray overlay from an interrupted run so it
+    // can never be captured by a later export.
+    try {
+      var strays = document.querySelectorAll('[data-app-expand-overlay]');
+      for (var i = 0; i < strays.length; i++) {
+        try { strays[i].parentNode.removeChild(strays[i]); } catch (e) {}
+      }
+    } catch (e) {}
+    return { ok: true };
+  }
+
+  var expandCancelRequested = false;
+  var expandCancelHandler = null;
+
+  function beginExpandCancel() {
+    expandCancelRequested = false;
+    try {
+      if (expandCancelHandler) {
+        window.removeEventListener('keydown', expandCancelHandler, true);
+      }
+    } catch (e) {}
+    expandCancelHandler = function (ev) {
+      try {
+        if (ev && (ev.key === 'Escape' || ev.keyCode === 27)) {
+          expandCancelRequested = true;
+          try { console.log('[renderer-agent] expand: cancel requested (Escape)'); } catch (e) {}
+        }
+      } catch (e) {}
+    };
+    try {
+      window.addEventListener('keydown', expandCancelHandler, true);
+      return { ok: true, armed: true };
+    } catch (e) {
+      return { ok: false, armed: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function endExpandCancel() {
+    try {
+      if (expandCancelHandler) {
+        window.removeEventListener('keydown', expandCancelHandler, true);
+      }
+    } catch (e) {}
+    expandCancelHandler = null;
+    var was = expandCancelRequested;
+    expandCancelRequested = false;
+    return { ok: true, wasCancelled: was };
+  }
+
+  function isExpandCancelled() {
+    return expandCancelRequested === true;
+  }
+
+  // Set the cancel flag without a keyboard event. Used by the main-process
+  // before-input-event fallback, which sees Escape even when the renderer's own
+  // keydown listener does not (e.g. focus sits outside the document).
+  function requestExpandCancel() {
+    expandCancelRequested = true;
+    try { console.log('[renderer-agent] expand: cancel requested (main process)'); } catch (e) {}
+    return { ok: true, cancelled: true };
+  }
+
+  function expandReasoningForPrint(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    var settleMs = Number(opts.settleMs || 120);
+    var maxClicks = Number(opts.maxClicks || 800);
+    // CAPTURE-AS-YOU-GO. Runtime logs proved that on large conversations a
+    // reasoning panel's BODY (the "Coding and executing" code + output, nested
+    // in scc-ChainOfThought__activitiesPanel) renders only transiently while it
+    // is the freshly-opened / in-view panel, then is torn down as the loop
+    // moves on -- a post-loop stabilization poll saw reasoningGrew: 0 because
+    // the bodies were already gone. So we snapshot each panel's body DURING the
+    // loop, immediately after opening it, and later re-inject the richest
+    // snapshot into the live DOM so it survives to printToPDF.
+    // Adaptive capture tunables (see the capture block below).
+    // capturePollMs      - interval between body-length samples.
+    // captureStableTicks - consecutive unchanged samples that mean "settled".
+    // capturePanelMaxMs  - per-panel ceiling so one slow panel cannot starve
+    //                      the rest of the conversation.
+    // captureThinChars   - below this the body is treated as not-yet-rendered
+    //                      and gets one hydration scroll attempt.
+    var capturePollMs = Number(opts.capturePollMs || 100);
+    var captureStableTicks = Number(opts.captureStableTicks || 2);
+    // Deliberately modest: the first pass should TRIGGER renders quickly, not
+    // wait serially for each one. Waiting is done by the materialization pass
+    // below, where all panels render concurrently instead of one at a time.
+    // (At 1500ms x 30 panels the first pass alone would exhaust a 60s budget.)
+    var capturePanelMaxMs = Number(opts.capturePanelMaxMs || 600);
+    var captureThinChars = Number(opts.captureThinChars || 1000);
+    // Materialization pass: how long to wait between re-check rounds, and how
+    // many rounds to attempt, while stragglers finish rendering asynchronously.
+    var materializeRoundMs = Number(opts.materializeRoundMs || 1200);
+    var materializeMaxRounds = Number(opts.materializeMaxRounds || 12);
+    // Hard wall-clock ceiling for the whole expand loop. Belt-and-suspenders
+    // against any DOM behavior that keeps the collapsed set from emptying
+    // (the 21-minute hang had no absolute bound). The processed-id set below
+    // is the primary termination guarantee; this is the backstop.
+    // Wall-clock ceiling for the whole pass. Supplied by lib/exporters.js from
+    // APP_CONFIG.reasoningExpandBudgetMs; the fallback here is generous because
+    // a too-small budget silently truncates the tail of the export (panels are
+    // processed top-to-bottom, so late panels are the ones lost).
+    var reasoningBudgetMs = Number(opts.reasoningBudgetMs) > 0
+      ? Number(opts.reasoningBudgetMs)
+      : 60000;
+
+    var root = null;
+    try { root = document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]'); } catch (e) {}
+    if (!root) { try { root = getPdfTargetPane(fallbackSelector); } catch (e) {} }
+    if (!root) return Promise.resolve({ ok: false, reason: 'no-marked-pane' });
+
+    var selectorList = safeSelectorList(REASONING_EXPAND_SELECTORS);
+    if (!selectorList) {
+      return Promise.resolve({
+        ok: true, reason: 'no-reasoning-selectors', found: 0, clicked: 0
+      });
+    }
+
+    // Timer-based wait. This MUST NOT depend on requestAnimationFrame: during
+    // PDF export (pdfPrepare has flattened the pane / the frame loop can be
+    // starved) rAF callbacks may never be delivered, so the previous
+    // rAF-then-setTimeout version could park forever on a single `await
+    // settle(...)`. Because the loop's wall-clock budget is only checked
+    // BETWEEN awaits, one non-resolving await hung the whole export (observed:
+    // 54 minutes, no expandReasoningForPrint result line, budget never fired).
+    // A plain setTimeout fires regardless of rAF, guaranteeing every await
+    // resolves and the loop always reaches its budget/termination checks.
+    function settle(ms) {
+      return new Promise(function (res) {
+        setTimeout(res, Math.max(0, Number(ms) || 0));
+      });
+    }
+    function rootTextLen() {
+      try { return String(root.innerText || root.textContent || '').length; }
+      catch (e) { return 0; }
+    }
+    // Total text length of the reasoning subtree only. This is the signal we
+    // stabilize on: as step bodies render progressively, this grows; when it
+    // stops growing the reasoning is fully populated. Using textContent (not
+    // innerText) so it counts text regardless of CSS/scroll clipping.
+    function reasoningTextLen() {
+      var total = 0;
+      try {
+        var panels = root.querySelectorAll('[class*="ChainOfThought"]');
+        for (var i = 0; i < panels.length; i++) {
+          try { total += String(panels[i].textContent || '').length; } catch (e) {}
+        }
+      } catch (e) {}
+      return total;
+    }
+    // From an expander button, walk up to its owning ChainOfThought container
+    // (the wrapper that also holds the activitiesPanel), skipping the button
+    // itself (whose class also contains "ChainOfThought").
+    function cotContainer(btn) {
+      var n = btn;
+      try {
+        while (n && n !== root) {
+          var cls = String((n.className && n.className.baseVal) || n.className || '');
+          if (/ChainOfThought/.test(cls) && !/expandButton/.test(cls)) return n;
+          n = n.parentElement;
+        }
+      } catch (e) {}
+      try { return btn.closest('[class*="ChainOfThought"]:not([class*="expandButton"])'); }
+      catch (e) { return null; }
+    }
+    // The activitiesPanel is the scroll container that holds the step bodies.
+    function activitiesPanelOf(container) {
+      if (!container) return null;
+      try {
+        var cls = String((container.className && container.className.baseVal) || container.className || '');
+        if (/activitiesPanel/.test(cls)) return container;
+        return container.querySelector('[class*="activitiesPanel"]');
+      } catch (e) { return null; }
+    }
+    // Stable key shared between capture (loop) and re-injection (post-loop).
+    // Prefer the button id (always present: e.g. "cot-r7rk-expand-button"),
+    // then the container id, then a positional ordinal as last resort.
+    function panelKey(btn, container, ordinal) {
+      try { if (btn && btn.id) return 'b:' + String(btn.id).replace(/-expand-button.*$/, ''); } catch (e) {}
+      try { if (container && container.id) return 'c:' + String(container.id); } catch (e) {}
+      return 'o:' + ordinal;
+    }
+    // Force scroll-gated / virtualized nested steps inside ONE open panel to
+    // mount by walking its scroll range top-to-bottom, then restoring.
+    function hydrateOnePanel(p) {
+      if (!p) return;
+      try {
+        var range = Math.max(0, (p.scrollHeight || 0) - (p.clientHeight || 0));
+        if (range > 8) {
+          var stepPx = Math.max(200, (p.clientHeight || 400) - 50);
+          for (var y = 0; y <= range; y += stepPx) {
+            try { p.scrollTop = y; } catch (e) {}
+          }
+          try { p.scrollTop = range; } catch (e) {}
+          try { p.scrollTop = 0; } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    function bodyTextLen(p) {
+      try { return String((p && p.textContent) || '').length; } catch (e) { return 0; }
+    }
+
+    // Capture-as-you-go state, keyed by panelKey(). captured holds the richest
+    // body snapshot ever seen for each panel; panelDiag is the per-panel
+    // diagnostic surfaced in the result.
+    //
+    // These MUST be declared here, in expandReasoningForPrint. They were
+    // previously declared in expandForPrint by mistake (both functions contain
+    // an identical "var menusBefore = new Set();" anchor). Because they were
+    // out of scope, the first unguarded use -- Object.keys(captured) inside the
+    // final resolve({...}) -- threw "ReferenceError: captured is not defined".
+    // That rejected the promise WITHOUT ever calling resolve(), so the main
+    // process await on this renderer call never settled and the export appeared
+    // to hang indefinitely (observed as 10/11/21/54-minute hangs). The loop
+    // itself was fine: renderer logs show loop-start -> loop-done in 0.8s.
+    var captured = {};
+    var panelDiag = [];
+    // Live references to every reasoning panel we opened, so the
+    // materialization pass below can revisit them. Clicking a panel only
+    // TRIGGERS its body render; the content arrives asynchronously and can take
+    // far longer than the per-panel capture window on a cold app start.
+    var openedPanels = [];
+
+    var menusBefore = new Set();
+    try {
+      document.querySelectorAll('[role="menu"],[role="dialog"],[role="listbox"]')
+        .forEach(function (n) { menusBefore.add(n); });
+    } catch (e) {}
+
+    return new Promise(function (resolve) {
+      (async function run() {
+        var found = 0, clicked = 0, attempts = 0, ordinal = 0, budgetHit = false, cancelled = false;
+        var beforeLen = rootTextLen();
+        // Set of expander identities already handled this run. This is the
+        // PRIMARY termination guarantee: we act on each unique expander at most
+        // once, so the loop runs at most (number of distinct expanders) times
+        // regardless of how the app re-renders or how the collapsed COUNT
+        // oscillates. Identity is the button id (always present, e.g.
+        // "cot-r7rk-expand-button"); a keyless button is neutralized instead.
+        var processed = {};
+        var startTime = Date.now();
+        try {
+          var collapsedAtStart = root.querySelectorAll(selectorList).length;
+          console.log('[renderer-agent] expandReasoning: loop-start', {
+            collapsedExpanders: collapsedAtStart, budgetMs: reasoningBudgetMs
+          });
+        } catch (e) {}
+        try {
+          // Expand ONE panel per iteration, re-querying the live DOM each time
+          // (clicking re-renders and detaches nodes, so a frozen NodeList goes
+          // stale). Each iteration we take the topmost collapsed expander whose
+          // identity has NOT been processed yet.
+          while (attempts < maxClicks) {
+            attempts++;
+
+            // User pressed Escape: stop cleanly, keeping what we already have.
+            if (isExpandCancelled()) { cancelled = true; break; }
+
+            // Wall-clock backstop.
+            if (Date.now() - startTime >= reasoningBudgetMs) { budgetHit = true; break; }
+
+            var all = null;
+            try { all = root.querySelectorAll(selectorList); } catch (e) {}
+            var count = all ? all.length : 0;
+            if (!count) break; // nothing collapsed remains
+
+            // Live progress. `found` is how many we have handled; `count` is
+            // how many remain collapsed, so found+count is the running total.
+            // Placed after count is computed -- reading it earlier would show
+            // NaN, since var-hoisting leaves it undefined at the loop top.
+            try {
+              showExpandOverlay(
+                'Expanding reasoning\u2026  ' + (found + 1) + ' / ' + (found + count) +
+                '\nPress Esc to cancel'
+              );
+            } catch (e) {}
+
+            // Find the first collapsed expander we have not handled yet.
+            var next = null;
+            for (var qi = 0; qi < all.length; qi++) {
+              var cand = all[qi];
+              var cid = '';
+              try { cid = String(cand.id || ''); } catch (e) {}
+              var idkey = cid || ('noid:' + qi);
+              if (!processed[idkey]) { next = cand; next.__cotKey = idkey; break; }
+            }
+            // Every collapsed expander remaining has already been processed
+            // (its click did not flip aria-expanded and it has no distinct id).
+            // Neutralize them so they drop out, then we are done.
+            if (!next) {
+              try {
+                for (var ni = 0; ni < all.length; ni++) {
+                  try { all[ni].setAttribute('aria-expanded', 'true'); } catch (e) {}
+                }
+              } catch (e) {}
+              break;
+            }
+
+            processed[next.__cotKey] = true;
+            found++;
+            // Bring it into view in case its body is viewport-gated.
+            try { next.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+            try { next.click(); } catch (e) {}
+            await settle(settleMs);
+
+            var after = count;
+            try { after = root.querySelectorAll(selectorList).length; } catch (e) {}
+            var opened = after < count;
+            if (opened) {
+              clicked++; // a panel actually opened
+            } else {
+              // Click did not open it (node replaced, lazy, or a menu-style
+              // control). Neutralize this node so it cannot block the panels
+              // below it, then continue.
+              try { next.setAttribute('aria-expanded', 'true'); } catch (e) {}
+            }
+
+            // --- Capture-as-you-go -------------------------------------------
+            // Snapshot THIS panel's body now, while it is the freshly-opened /
+            // in-view panel and its body is (transiently) rendered. Waiting
+            // until after the whole loop misses it: at scale the app tears the
+            // body back down once the loop moves on.
+            ordinal++;
+            var container = cotContainer(next);
+            var panel = activitiesPanelOf(container);
+            var key = panelKey(next, container, ordinal);
+            if (panel) {
+              // Adaptive capture. The previous version paid a fixed
+              // 2 x captureSettleMs (~600ms) per panel whether or not the body
+              // was already rendered. On a 30-panel conversation that consumed
+              // the entire wall-clock budget after 10 panels, so the remaining
+              // 20 were never expanded -- the export degraded from full bodies,
+              // to headline-only, to no reasoning at all, top to bottom.
+              //
+              // Instead: poll the body length and stop as soon as it stops
+              // growing. An already-rendered panel settles in ~2 polls (~200ms);
+              // only panels that still look unrendered pay the hydration scroll
+              // and the longer wait, capped per panel by capturePanelMaxMs. The
+              // global budget is still honored inside the loop so one slow panel
+              // cannot starve the rest.
+              var panelStart = Date.now();
+              var liveLen = bodyTextLen(panel);
+              var lastLen = -1;
+              var stable = 0;
+              var polls = 0;
+              var hydrated = false;
+              while (
+                (Date.now() - startTime) < reasoningBudgetMs &&
+                (Date.now() - panelStart) < capturePanelMaxMs
+              ) {
+                // "Unchanged" only means SETTLED once the body actually has
+                // content. A body that has not STARTED rendering is also
+                // unchanged, and the previous version treated that as settled
+                // and moved on after ~200ms -- which is why a fresh app start
+                // captured all 30 panels at 9-626 chars (headlines) with
+                // polls:2. Thin panels now keep waiting until they either
+                // materialize or hit capturePanelMaxMs.
+                if (liveLen === lastLen && liveLen >= captureThinChars) {
+                  stable++;
+                  if (stable >= captureStableTicks) break; // body has settled
+                } else {
+                  stable = 0;
+                  lastLen = liveLen;
+                }
+                // One hydration attempt, only for panels that still look
+                // unrendered. The internal scroll walk is the expensive part, so
+                // panels whose body is already present skip it entirely.
+                if (!hydrated && liveLen < captureThinChars) {
+                  hydrateOnePanel(panel);
+                  hydrated = true;
+                }
+                await settle(capturePollMs);
+                polls++;
+                liveLen = bodyTextLen(panel);
+              }
+              // Keep the richest snapshot ever seen for this key.
+              if (!captured[key] || liveLen > captured[key].len) {
+                try { captured[key] = { html: panel.innerHTML, len: liveLen }; } catch (e) {}
+              }
+              openedPanels.push({ key: key, panel: panel, index: ordinal });
+              panelDiag.push({
+                index: ordinal,
+                key: key,
+                opened: opened,
+                liveBodyLenAtCapture: liveLen,
+                capturedBodyLen: captured[key] ? captured[key].len : 0,
+                polls: polls,
+                hydrated: hydrated,
+                thin: liveLen < captureThinChars,
+                msSpent: (Date.now() - panelStart)
+              });
+            } else {
+              panelDiag.push({
+                index: ordinal,
+                key: key,
+                opened: opened,
+                noPanel: true,
+                liveBodyLenAtCapture: 0,
+                capturedBodyLen: 0
+              });
+            }
+          }
+        } catch (e) {}
+
+        // --- Adopt already-open panels ---------------------------------------
+        // The click loop only tracks panels IT opened. But by the time this
+        // function runs, expandForPrint() has usually already clicked every
+        // chain-of-thought control open: its allow-list matches any class
+        // containing "expand", and the control's class is
+        // scc-ChainOfThought__expandButton. Because REASONING_EXPAND_SELECTORS
+        // only match [aria-expanded="false"], this function then finds nothing
+        // -- measured: found 0, clicked 0, elapsedMs 5, materializeRounds 0.
+        //
+        // "Open" is not the same as "rendered", though. The bodies still render
+        // asynchronously, and with openedPanels empty the materialization pass
+        // below had nothing to wait on, so the export captured headlines only
+        // (DOM text stuck at ~696K where a later PDF run measured ~1.14M).
+        //
+        // So: adopt every reasoning panel present in the DOM, regardless of who
+        // opened it. The materialization pass then waits for all of them.
+        var adopted = 0;
+        try {
+          var known = {};
+          for (var ai = 0; ai < openedPanels.length; ai++) {
+            known[openedPanels[ai].key] = true;
+          }
+          var allCots = root.querySelectorAll('[class*="ChainOfThought"]');
+          for (var ci2 = 0; ci2 < allCots.length; ci2++) {
+            var cont = allCots[ci2];
+            var pnl = activitiesPanelOf(cont);
+            if (!pnl) continue; // buttons / non-panel matches
+            var btn2 = null;
+            try { btn2 = cont.querySelector('[class*="expandButton"]'); } catch (e) {}
+            var k2 = panelKey(btn2, cont, -1);
+            if (known[k2]) continue;
+            known[k2] = true;
+            openedPanels.push({ key: k2, panel: pnl, index: -1 });
+            adopted++;
+          }
+        } catch (e) {}
+        try {
+          console.log('[renderer-agent] expandReasoning: adopted-open-panels', {
+            adopted: adopted, tracked: openedPanels.length
+          });
+        } catch (e) {}
+
+        // --- Materialization pass --------------------------------------------
+        // Clicking a reasoning panel only TRIGGERS its body render; the content
+        // arrives asynchronously. On a cold app start the whole conversation is
+        // under-rendered (a measured fresh run had 156K chars of pane text and
+        // 64K of reasoning; the SAME conversation minutes later had 981K and
+        // 5.7M), so every panel was still a headline when its capture window
+        // closed and the export faithfully printed headlines.
+        //
+        // This pass revisits panels that are still thin AFTER all clicks have
+        // been issued -- by then the earliest clicks have had the entire click
+        // loop's duration to render. It re-checks them in rounds, capturing
+        // whatever has materialized, until nothing thin remains or the budget
+        // runs out. This is the same effect that made the user's SECOND export
+        // succeed, without needing a second export.
+        var matRounds = 0, matCaptured = 0, matStillThin = 0;
+        try {
+          while ((Date.now() - startTime) < reasoningBudgetMs) {
+            if (isExpandCancelled()) { cancelled = true; break; }
+            try {
+              showExpandOverlay(
+                'Waiting for reasoning to render\u2026  round ' + (matRounds + 1) +
+                '\nPress Esc to cancel'
+              );
+            } catch (e) {}
+            var thinOnes = [];
+            for (var mi = 0; mi < openedPanels.length; mi++) {
+              var rec = openedPanels[mi];
+              var curLen = bodyTextLen(rec.panel);
+              if (curLen < captureThinChars) thinOnes.push(rec);
+              // Always keep the richest version seen, even if still thin.
+              if (!captured[rec.key] || curLen > captured[rec.key].len) {
+                try {
+                  captured[rec.key] = { html: rec.panel.innerHTML, len: curLen };
+                  matCaptured++;
+                } catch (e) {}
+              }
+            }
+            matStillThin = thinOnes.length;
+            if (!thinOnes.length) break;   // everything materialized
+            if (matRounds >= materializeMaxRounds) break;
+            // Nudge the stragglers, then give the app time to render.
+            for (var ti = 0; ti < thinOnes.length; ti++) {
+              try {
+                thinOnes[ti].panel.scrollIntoView({ block: 'center', inline: 'nearest' });
+              } catch (e) {}
+              hydrateOnePanel(thinOnes[ti].panel);
+            }
+            // Sleep in short slices so Escape is noticed promptly instead of
+            // after the full round delay.
+            var waited = 0;
+            while (waited < materializeRoundMs) {
+              if (isExpandCancelled()) { cancelled = true; break; }
+              var slice = Math.min(150, materializeRoundMs - waited);
+              await settle(slice);
+              waited += slice;
+            }
+            if (cancelled) break;
+            matRounds++;
+          }
+        } catch (e) {}
+
+        try {
+          console.log('[renderer-agent] expandReasoning: materialize-done', {
+            rounds: matRounds, captured: matCaptured, stillThin: matStillThin,
+            elapsedMs: (Date.now() - startTime)
+          });
+        } catch (e) {}
+
+        try {
+          console.log('[renderer-agent] expandReasoning: loop-done', {
+            found: found, clicked: clicked, attempts: attempts,
+            uniqueProcessed: Object.keys(processed).length,
+            budgetHit: budgetHit, elapsedMs: (Date.now() - startTime)
+          });
+        } catch (e) {}
+
+        // --- Re-injection pass ----------------------------------------------
+        // Native printToPDF snapshots the LIVE DOM. Any panel whose body was
+        // captured richer than its current live state (because the app tore the
+        // body down after we moved on) is written back from the snapshot so it
+        // survives to print. Best-effort and guarded: it only ever GROWS a
+        // panel (never shrinks), and is a no-op when the live body already
+        // matches the capture. Re-injected panels are tagged
+        // data-cot-captured="1" for post-hoc inspection.
+        var reinjected = 0, examined = 0, reasoningStart = reasoningTextLen();
+        try {
+          var containers = root.querySelectorAll('[class*="ChainOfThought"]');
+          for (var ci = 0; ci < containers.length; ci++) {
+            var c = containers[ci];
+            var p = activitiesPanelOf(c);
+            if (!p) continue; // buttons / non-panel matches
+            examined++;
+            var cbtn = null;
+            try { cbtn = c.querySelector('[class*="expandButton"]'); } catch (e) {}
+            var ckey = panelKey(cbtn, c, -1);
+            var snap = captured[ckey];
+            if (!snap) continue;
+            var liveNow = bodyTextLen(p);
+            if (snap.len > liveNow + 4) {
+              try {
+                p.innerHTML = snap.html;
+                p.setAttribute('data-cot-captured', '1');
+                reinjected++;
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+        var reasoningEnd = reasoningTextLen();
+        try {
+          console.log('[renderer-agent] expandReasoning: reinject-done', {
+            examined: examined, reinjected: reinjected,
+            capturedPanels: Object.keys(captured).length
+          });
+        } catch (e) {}
+
+        var newMenu = null;
+        try {
+          var menusAfter = document.querySelectorAll('[role="menu"],[role="dialog"],[role="listbox"]');
+          for (var m = 0; m < menusAfter.length; m++) {
+            if (!menusBefore.has(menusAfter[m])) { newMenu = menusAfter[m]; break; }
+          }
+        } catch (e) {}
+        if (newMenu) {
+          try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); } catch (e) {}
+        }
+
+        var afterLen = rootTextLen();
+        resolve({
+          ok: true,
+          selectorCount: REASONING_EXPAND_SELECTORS.length,
+          found: found,
+          clicked: clicked,
+          neutralized: (found - clicked),
+          attempts: attempts,
+          uniqueProcessed: Object.keys(processed).length,
+          budgetHit: budgetHit,
+          budgetMs: reasoningBudgetMs,
+          elapsedMs: (Date.now() - startTime),
+          rootTextBefore: beforeLen,
+          rootTextAfter: afterLen,
+          grew: afterLen - beforeLen,
+          menuDetected: !!newMenu,
+          // Capture-as-you-go metrics.
+          capturedPanels: Object.keys(captured).length,
+          materializeRounds: matRounds,
+          materializeCaptured: matCaptured,
+          materializeStillThin: matStillThin,
+          adoptedOpenPanels: adopted,
+          cancelled: cancelled,
+          examinedPanels: examined,
+          reinjectedPanels: reinjected,
+          reasoningTextBeforeReinject: reasoningStart,
+          reasoningTextAfterReinject: reasoningEnd,
+          reasoningGrew: reasoningEnd - reasoningStart,
+          // Per-panel diagnostic (bounded) for reasoning body capture.
+          panels: panelDiag.slice(0, 100)
+        });
+      })().catch(function (e) {
+        // NEVER leave this promise unsettled. The async body above builds its
+        // result outside the inner try/catch blocks, so any unexpected throw
+        // (e.g. the out-of-scope `captured` ReferenceError that caused the
+        // multi-minute "hangs") would otherwise reject silently and leave the
+        // main process awaiting a call that never returns. Resolving with an
+        // error object keeps the export moving and surfaces the fault in the
+        // main-process log.
+        try {
+          resolve({
+            ok: false,
+            reason: 'expand-threw',
+            error: String((e && e.message) || e),
+            stack: String((e && e.stack) || '').slice(0, 600)
+          });
+        } catch (_) {}
+      });
+    });
+  }
+
   Object.defineProperty(window, RENDERER_API_GLOBAL, {
     value: Object.freeze({
       __version: RENDERER_AGENT_VERSION,
@@ -3578,11 +4741,20 @@ function waitForPrintableAssets(options) {
       startVWResize: startVWResize,
       capturePdfLayoutBaseline: capturePdfLayoutBaseline,
       capturePdfLayoutStage: capturePdfLayoutStage,
+      capturePdfResourceDiagnostic: capturePdfResourceDiagnostic,
       armPdfBeforePrintDiagnostic: armPdfBeforePrintDiagnostic,
       getPdfBeforePrintDiagnostic: getPdfBeforePrintDiagnostic,
       stopVWResize: stopVWResize,
       waitForPrintableAssets: waitForPrintableAssets,
-      diagnosePdfLayout: diagnosePdfLayout
+      diagnosePdfLayout: diagnosePdfLayout,
+      capturePdfConversationDiagnostic: capturePdfConversationDiagnostic,
+      expandReasoningForPrint: expandReasoningForPrint,
+      beginExpandCancel: beginExpandCancel,
+      endExpandCancel: endExpandCancel,
+      isExpandCancelled: isExpandCancelled,
+      requestExpandCancel: requestExpandCancel,
+      showExpandOverlay: showExpandOverlay,
+      hideExpandOverlay: hideExpandOverlay
     }),
     writable: false,
     configurable: true,
