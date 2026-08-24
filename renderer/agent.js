@@ -4717,6 +4717,49 @@ function waitForPrintableAssets(options) {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Cheap live scroller measurement.
+  //
+  // Returns the current scroll RANGE of the same virtualized scroller that
+  // hydrateVirtualizer()/collectVirtualizedChatHtml() would choose. This is
+  // used by the export's flatten-retry loop as a "has the app finished laying
+  // the conversation out?" signal: a run where the app is still measuring rows
+  // reports a smaller range (observed 326,952) than a fully laid-out run
+  // (709,383), and capturing before it settles truncates the export.
+  //
+  // Deliberately does NOT scroll-walk. findBestChatScroller may nudge scrollTop
+  // by a few px to probe scrollability, but it restores it. Read-only otherwise.
+  function measureChatScroller(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    var root = null;
+    try { root = document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]'); } catch (e) {}
+    if (!root) { try { root = getPdfTargetPane(fallbackSelector); } catch (e) {} }
+    if (!root) return { ok: false, reason: 'no-marked-pane' };
+    try {
+      var scroller = findBestChatScroller(root, null);
+      if (!scroller) {
+        return {
+          ok: true,
+          scrollerFound: false,
+          scrollerRange: 0,
+          scrollHeight: 0,
+          clientHeight: 0
+        };
+      }
+      return {
+        ok: true,
+        scrollerFound: true,
+        scrollerRange: scrollRange(scroller),
+        scrollHeight: Number(scroller.scrollHeight || 0),
+        clientHeight: Number(scroller.clientHeight || 0),
+        scrollerLabel: elementLabel(scroller)
+      };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
   Object.defineProperty(window, RENDERER_API_GLOBAL, {
     value: Object.freeze({
       __version: RENDERER_AGENT_VERSION,
@@ -4754,7 +4797,8 @@ function waitForPrintableAssets(options) {
       isExpandCancelled: isExpandCancelled,
       requestExpandCancel: requestExpandCancel,
       showExpandOverlay: showExpandOverlay,
-      hideExpandOverlay: hideExpandOverlay
+      hideExpandOverlay: hideExpandOverlay,
+      measureChatScroller: measureChatScroller
     }),
     writable: false,
     configurable: true,

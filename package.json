@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "2.99.02",
+  "version": "2.99.03",
   "description": "Copilot for Linux",
   "desktopName": "copilot-for-linux",
   "main": "main.js",
@@ -106,7 +106,7 @@
   },
   "license": "BSD 3-Clause License",
   "devDependencies": {
-    "electron": "^43.2.0",
+    "electron": "^43.4.1",
     "electron-builder": "^26.4.0"
   },
   "dependencies": {

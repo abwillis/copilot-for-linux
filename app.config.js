@@ -19,6 +19,19 @@ const defaultAppConfig = Object.freeze({
   // table, lists, images) are preserved. Set false to make cleanMarkdown
   // behave like rawMarkdown. rawMarkdown is never affected by this.
   cleanMarkdownStripsJunk: true,
+  // Flatten-retry + scroller-stability. Exporting the same conversation could
+  // yield a half-size file that only completed on a second export: pdfPrepare()
+  // mounts rows and leaves them mounted, so the second run built on the first.
+  // The markdown/HTML/text snapshot now retries the flatten/capture until the
+  // captured content stops growing; both paths first wait for the live scroller
+  // range to hold steady (the app finishing layout) so nothing is captured
+  // mid-layout. All bounded so they can never hang.
+  flattenRetryMaxPasses: 4,
+  flattenRetryBudgetMs: 60000,
+  scrollerStableSamples: 2,
+  scrollerStablePollMs: 400,
+  scrollerStableBudgetMs: 8000,
+  scrollerStableBeforePdf: true,
   defaultExportFormat: 'pdf',
   defaultPaneExportProfile: 'pdf',
   defaultSelectionExportProfile: 'pdf',
