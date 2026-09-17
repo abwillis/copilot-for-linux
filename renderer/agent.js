@@ -3134,6 +3134,216 @@
       }, timeoutMs);
     });
   }
+  // -------------------------------------------------------------------------
+  // Composer (input box) identification
+  //
+  // WHY THIS IS JS AND NOT CSS:
+  // lib/layout-css.js previously located the composer with a live :has()
+  // ladder:
+  //
+  //   body :is(div, form, section)
+  //       :not(:has(CONVO_SCOPE))
+  //       :not(:has(nav, header, ...))
+  //       :has([contenteditable="true"])
+  //
+  // That is three descendant searches per candidate element, re-evaluated by
+  // Chromium on every DOM mutation -- and the composer mutates on every
+  // keystroke.
+  //
+  // The DISCOVERY is what has to stay generic, not the mechanism. This does
+  // the same structural walk (editor -> outward, stop at the app shell) with
+  // no app class names, no fai-*/scc-* hooks and no fixed depth, marks the
+  // wrappers with COMPOSER_MARKER_ATTR, and lets CSS match a plain attribute.
+  //
+  // The whole wrapper CHAIN is marked, not just one element: the old selector
+  // matched every wrapper between the editor and the shell, and each of those
+  // may carry its own max-width clamp.
+  // -------------------------------------------------------------------------
+  var COMPOSER_MARKER_ATTR = 'data-expanded-composer';
+  var COMPOSER_SHELL_SELECTORS = [
+    'nav',
+    'header',
+    '[role="navigation"]',
+    '[role="banner"]'
+  ];
+  var COMPOSER_FALLBACK_INPUT_SELECTORS = [
+    '[contenteditable="true"]',
+    'textarea',
+    '[role="textbox"]'
+  ];
+  var composerMarked = [];
+  var composerEditor = null;
+  var composerObserver = null;
+  var composerTimer = null;
+  var COMPOSER_THROTTLE_MS = 300;
+
+  // A wrapper that also contains the transcript, or a nav/header landmark, is
+  // the app shell. Same two structural guards the old CSS used, expressed as
+  // querySelector instead of :not(:has(...)).
+  function isComposerShell(el) {
+    if (!el || !el.querySelector) return false;
+    for (var i = 0; i < CHAT_ROOT_SELECTORS.length; i++) {
+      try {
+        if (el.querySelector(CHAT_ROOT_SELECTORS[i])) return true;
+      } catch (e) {}
+    }
+    var shellSel = safeSelectorList(COMPOSER_SHELL_SELECTORS);
+    if (shellSel) {
+      try {
+        if (el.querySelector(shellSel)) return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+
+  // Multiline editors only -- CHAT_INPUT_SELECTORS is supplied by each app's
+  // lib/chat-dom.js, so a bare <input> (sidebar search) is never a candidate.
+  function findComposerEditor() {
+    var selectors = (CHAT_INPUT_SELECTORS && CHAT_INPUT_SELECTORS.length)
+      ? CHAT_INPUT_SELECTORS
+      : COMPOSER_FALLBACK_INPUT_SELECTORS;
+    for (var i = 0; i < selectors.length; i++) {
+      var selector = String(selectors[i] || '').trim();
+      if (!selector) continue;
+      try {
+        var candidates = document.querySelectorAll(selector);
+        // Last match wins: when an app renders more than one editor the
+        // composer is the one latest in document order.
+        for (var j = candidates.length - 1; j >= 0; j--) {
+          if (visible(candidates[j])) return candidates[j];
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function findComposerWrapperChain(editor) {
+    var chain = [];
+    if (!editor) return chain;
+    var n = editor.parentElement;
+    while (n && n !== document.body && n !== document.documentElement) {
+      if (isComposerShell(n)) break;
+      chain.push(n);
+      n = n.parentElement;
+    }
+    return chain;
+  }
+
+  function sameComposerChain(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
+  function clearComposerMarkers(nodes) {
+    for (var i = 0; i < nodes.length; i++) {
+      try { nodes[i].removeAttribute(COMPOSER_MARKER_ATTR); } catch (e) {}
+    }
+  }
+
+  function updateComposerMarker() {
+    try {
+      // Fast path: nothing was torn down, so there is no work to do. This is
+      // what keeps the MutationObserver callback cheap.
+      if (
+        composerEditor &&
+        composerEditor.isConnected &&
+        composerMarked.length
+      ) {
+        var intact = true;
+        for (var k = 0; k < composerMarked.length; k++) {
+          if (
+            !composerMarked[k].isConnected ||
+            composerMarked[k].getAttribute(COMPOSER_MARKER_ATTR) !== '1'
+          ) {
+            intact = false;
+            break;
+          }
+        }
+        if (intact) {
+          return { ok: true, changed: false, marked: composerMarked.length };
+        }
+      }
+
+      var editor = findComposerEditor();
+      var chain = findComposerWrapperChain(editor);
+
+      if (composerEditor === editor && sameComposerChain(composerMarked, chain)) {
+        return { ok: true, changed: false, marked: composerMarked.length };
+      }
+
+      // Drop stale markers, including any left by an interrupted run.
+      clearComposerMarkers(composerMarked);
+      try {
+        var strays = document.querySelectorAll('[' + COMPOSER_MARKER_ATTR + ']');
+        for (var s = 0; s < strays.length; s++) {
+          if (chain.indexOf(strays[s]) === -1) {
+            try { strays[s].removeAttribute(COMPOSER_MARKER_ATTR); } catch (e) {}
+          }
+        }
+      } catch (e) {}
+
+      for (var c = 0; c < chain.length; c++) {
+        try { chain[c].setAttribute(COMPOSER_MARKER_ATTR, '1'); } catch (e) {}
+      }
+
+      composerEditor = editor;
+      composerMarked = chain;
+
+      return {
+        ok: true,
+        changed: true,
+        marked: chain.length,
+        editorFound: !!editor
+      };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function startComposerTracking(options) {
+    var opts = options || {};
+    var throttleMs = Number(opts.throttleMs || COMPOSER_THROTTLE_MS);
+    try {
+      stopComposerTracking();
+    } catch (e) {}
+    var first = updateComposerMarker();
+    try {
+      composerObserver = new MutationObserver(function () {
+        if (composerTimer) return; // trailing throttle
+        composerTimer = setTimeout(function () {
+          composerTimer = null;
+          try { updateComposerMarker(); } catch (e) {}
+        }, throttleMs);
+      });
+      composerObserver.observe(document.documentElement || document.body, {
+        childList: true,
+        subtree: true
+      });
+      return { ok: true, installed: true, initial: first };
+    } catch (e) {
+      composerObserver = null;
+      return { ok: false, installed: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  function stopComposerTracking() {
+    try {
+      if (composerObserver) composerObserver.disconnect();
+    } catch (e) {}
+    composerObserver = null;
+    try {
+      if (composerTimer) clearTimeout(composerTimer);
+    } catch (e) {}
+    composerTimer = null;
+    clearComposerMarkers(composerMarked);
+    composerMarked = [];
+    composerEditor = null;
+    return { ok: true, uninstalled: true };
+  }
+
 
 // -------------------------------------------------------------------------
 // Print-window asset readiness.
@@ -4778,6 +4988,9 @@ function waitForPrintableAssets(options) {
       enableFindContentVisibility: enableFindContentVisibility,
       disableFindContentVisibility: disableFindContentVisibility,
       waitForChatInputReady: waitForChatInputReady,
+      updateComposerMarker: updateComposerMarker,
+      startComposerTracking: startComposerTracking,
+      stopComposerTracking: stopComposerTracking,
       getTargetVW: getTargetVW,
       setTargetVW: setTargetVW,
       seedTargetVW: seedTargetVW,

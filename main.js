@@ -81,6 +81,7 @@ const {
     disableFindContentVisibility,
     applyDynamicWidth,
     attachVWResize,
+    attachComposerTracking,
 } = createLayoutCSS({
     rendererApiGlobal: RENDERER_API_GLOBAL,
     dynamicWidth: APP_DYNAMIC_WIDTH,
@@ -247,6 +248,7 @@ function initWindowHelpers() {
     applyMaxLayoutCSS,
     attachVWResize,
     applyDynamicWidth,
+    attachComposerTracking,
   });
   return windowHelpersInstance;
 }
