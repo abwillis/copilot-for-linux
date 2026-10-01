@@ -3312,11 +3312,18 @@
     var first = updateComposerMarker();
     try {
       composerObserver = new MutationObserver(function () {
-        if (composerTimer) return; // trailing throttle
-        composerTimer = setTimeout(function () {
+      // Ordinary editor mutations do not invalidate the wrapper chain.
+      // Only rescan after the tracked editor has been detached or replaced.
+      if (composerEditor && composerEditor.isConnected) return;
+
+      if (composerTimer) return; // trailing throttle
+
+      composerTimer = setTimeout(function () {
           composerTimer = null;
-          try { updateComposerMarker(); } catch (e) {}
-        }, throttleMs);
+          try {
+              updateComposerMarker();
+          } catch (e) {}
+      }, throttleMs);
       });
       composerObserver.observe(document.documentElement || document.body, {
         childList: true,
