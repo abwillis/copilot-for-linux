@@ -148,8 +148,10 @@ function installRendererAgent(webContents) {
   const run = () => {
     try { webContents.executeJavaScript(boot, true).catch(() => {}); } catch {}
   };
-  webContents.on('did-finish-load', run);
-  webContents.on('did-navigate-in-page', run);
+  // A full navigation creates a new document (and therefore a new global), so
+  // install the full agent once when that document is ready. In-page/SPA
+  // navigation keeps the same document and the existing agent instance.
+  webContents.on('dom-ready', run);
   webContents.on('frame-created', (_e, payload) => {
     const frame = payload && payload.frame;
     if (!frame) return;

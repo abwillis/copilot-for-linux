@@ -39,7 +39,7 @@
     window[RENDERER_API_GLOBAL] &&
     window[RENDERER_API_GLOBAL].__version === RENDERER_AGENT_VERSION
   ) {
-    return; // idempotent across SPA navigations
+    return; // idempotent if installation is retried in the same document
   }
 
   // App-specific DOM selectors are injected by main.js via init().
