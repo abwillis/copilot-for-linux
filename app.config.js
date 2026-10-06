@@ -12,12 +12,12 @@ const defaultAppConfig = Object.freeze({
   // 291,180 of 853,955 chars. Real content images are unaffected. Set false to
   // restore the previous behaviour of embedding every image.
   stripDecorativeIcons: true,
-  // cleanMarkdown export strips UI chrome via DOM_CLEANUP_SELECTORS: buttons,
-  // copy/feedback widgets, toolbars, and the code-gutter line numbers and
-  // "Show more lines" expanders that Turndown otherwise emits as standalone
-  // paragraphs between every line of code. Content selectors (pre, code,
-  // table, lists, images) are preserved. Set false to make cleanMarkdown
-  // behave like rawMarkdown. rawMarkdown is never affected by this.
+  // cleanMarkdown export evaluates likely UI chrome with a cleanup predicate.
+  // Selector matches only generate candidates; controls are removed or
+  // unwrapped only after interactive and content-preservation checks. Anchors,
+  // citations, attachments, code, tables, lists, and media are preserved. Set
+  // false to make cleanMarkdown behave like rawMarkdown. rawMarkdown is never
+  // affected by this.
   cleanMarkdownStripsJunk: true,
   // Flatten-retry + scroller-stability. Exporting the same conversation could
   // yield a half-size file that only completed on a second export: pdfPrepare()
@@ -113,7 +113,7 @@ module.exports = Object.freeze({
   partitionEnvVar: 'COPILOT_PARTITION',
   layoutObserverGlobal: '__copilot_layoutObserver',
   rendererApiGlobal: '__copilotRenderer',
-  rendererAgentVersion: 1,
+  rendererAgentVersion: 3,
 
   dynamicWidth: Object.freeze({
     cssVar: '--copilot-vw',

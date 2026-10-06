@@ -16,6 +16,16 @@ contextBridge.exposeInMainWorld('findModal', {
     ipcRenderer.send('find-modal-clear');
   },
 
+  cancelIndexing() {
+    ipcRenderer.send('find-modal-cancel-indexing');
+  },
+
+  navigateResult(resultId) {
+    ipcRenderer.send('find-modal-navigate-result', {
+      resultId: resultId == null ? null : String(resultId),
+    });
+  },
+
   close() {
     ipcRenderer.send('find-modal-close');
   },

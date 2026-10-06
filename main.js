@@ -30,7 +30,7 @@ const {
   CHAT_SCOPE_SELECTOR, CHAT_SCOPE_PSEUDO,
   CHAT_MESSAGE_LIST_SELECTOR, CHAT_MESSAGE_LIST_PSEUDO,
   EXPORT_ROOT_CLASS, EXPORT_ROOT_SELECTOR,
-  CODE_PREVIEW_IFRAME_SELECTOR, DOM_CLEANUP_SELECTORS, DOM_PRESERVE_CONTENT_SELECTORS,
+  CODE_PREVIEW_IFRAME_SELECTOR, DOM_CLEANUP_SELECTORS, DOM_CLEANUP_POLICY, DOM_ADAPTER_CONTRACT, DOM_PRESERVE_CONTENT_SELECTORS,
   PRINT_BUBBLE_CSS,
   VIRTUALIZER_SELECTORS,
   DOM_SCORE_RULES,
@@ -78,6 +78,8 @@ const APP_DYNAMIC_WIDTH = appConfig.dynamicWidth || null;
 // window[globalName] renderer agent and the correct CSS variable.
 const {
     enableFindContentVisibility,
+    indexFindConversation,
+    cancelFindContentVisibilityIndexing,
     disableFindContentVisibility,
     applyDynamicWidth,
     attachVWResize,
@@ -95,6 +97,8 @@ function getRendererAgentBoot() {
     const cfg = JSON.stringify({
       chatRootSelectors: CHAT_ROOT_SELECTORS,
       junkSelectors: DOM_CLEANUP_SELECTORS,
+      cleanupPolicy: DOM_CLEANUP_POLICY,
+      domAdapterContract: DOM_ADAPTER_CONTRACT,
       preserveSelectors: DOM_PRESERVE_CONTENT_SELECTORS,
       virtualizerSelectors: VIRTUALIZER_SELECTORS,
       scoreRules: DOM_SCORE_RULES,
@@ -340,6 +344,45 @@ function openConfigFile(...args) { return initSessionHelpers().openConfigFile(..
 function toggleActiveWindowAlwaysOnTop(...args) { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(...args); }
 function showAboutDialog(...args) { return initSessionHelpers().showAboutDialog(...args); }
 function showApplicationHelp(...args) { return initSessionHelpers().showApplicationHelp(...args); }
+async function showSelectorHealth() {
+  const win = getActiveAppWindow();
+  if (!win?.webContents) return;
+  const results = await require('./lib/renderer-api').callRendererMethodInAllFrames(
+    win, 'getDomAdapterHealth',
+    { __rendererApiOptions: { rendererApiGlobal: RENDERER_API_GLOBAL } }
+  );
+  const best = results.map(r => r && r.value).filter(v => v && v.ok)
+    .sort((a, b) => Number(b.selectedRootConfidence || 0) - Number(a.selectedRootConfidence || 0))[0];
+  const caps = best?.capabilities || {};
+  const completeness = best?.exportCompleteness || {};
+  const thresholds = best?.exportThresholds || {};
+  const lines = [
+    'Selected root: ' + (best?.selectedRoot || 'not found'),
+    'Root confidence: ' + Number(best?.selectedRootConfidence || 0) +
+      ' (read ' + Number(thresholds.read || 0) +
+      ', destructive ' + Number(thresholds.destructive || 0) + ')',
+    'Root evidence: ' + ((caps.chatRoot?.evidence || []).join(', ') || 'none'),
+    'Root warnings: ' + ((caps.chatRoot?.warnings || []).join(', ') || 'none'),
+    'Message rows: ' + Number(best?.messageRowCount || 0),
+    'Composer: ' + (caps.composer?.found ? 'found (' + caps.composer.confidence + ')' : 'not found'),
+    'Virtualizer: ' + (caps.virtualizer?.found ? 'found (' + caps.virtualizer.confidence + ')' : 'not found'),
+    'Disclosure: ' + (caps.disclosureControl?.found ? 'found (' + caps.disclosureControl.confidence + ')' : 'not found'),
+    'Fallback tier: ' + (best?.activeFallbackTier || 'unknown'),
+    'Export checks: ' + (completeness.destructiveReady ? 'ready' : 'blocked (low confidence)'),
+    'Row order: ' + (completeness.orderedRows ? 'verified' : 'not verified'),
+    'Stable row identifiers: ' + Number(completeness.stableRowIdentifiers || 0) +
+      '/' + Number(best?.messageRowCount || 0) +
+      ' (' + Number(completeness.stableRowIdentifierCoveragePct || 0) + '%)',
+    'Scroll owner: ' + (completeness.scrollerFound
+      ? 'found (range ' + Number(completeness.scrollerRange || 0) + ')'
+      : 'not found'),
+    'Completeness warnings: ' + ((completeness.warnings || []).join(', ') || 'none'),
+    'Contract version: ' + Number(best?.contractVersion || 0),
+    'Agent version: ' + RENDERER_AGENT_VERSION,
+    'App version: ' + (app.getVersion?.() || 'unknown')
+  ];
+  await dialog.showMessageBox(win, { type: 'info', title: 'Selector Health', message: 'Local DOM adapter health', detail: lines.join('\n'), buttons: ['OK'], noLink: true });
+}
 
 // ---------- Find-in-page module bridge ----------
 let findInPageInstance = null;
@@ -352,6 +395,8 @@ function initFindInPage() {
     getMainWindow: () => mainWindow,
     getAppConfig,
     enableFindContentVisibility,
+    indexFindConversation,
+    cancelFindContentVisibilityIndexing,
     disableFindContentVisibility,
   });
   return findInPageInstance;
@@ -549,7 +594,7 @@ function initAppMenu() {
     copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
     getDiagnosticSessionStatus, toggleDiagnosticSession, deleteDiagnosticLogs,
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
-    getRuntimeInfo, appIconImage,
+    getRuntimeInfo, appIconImage, showSelectorHealth,
     buildExportProfileMenuTemplate, promptExportWithProfile,
     selectChatPane, expandChatPane, promptSaveChatPane, printChatPane, printSelection, saveSelectionAsMarkdown, EXPORT_SCOPES,
     buildQuickChatManagerMenuTemplate, installQuickChatMenu, refreshQuickChatMenu,

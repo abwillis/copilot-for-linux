@@ -13,8 +13,9 @@
 //   pdfPrepare(options)      -- prepares marked chat pane for native PDF print
 //   pdfRestore()             -- restores DOM state changed by pdfPrepare()
 //   cleanExportHtml(html, preserveSelectors) -- cleans detached export HTML
-//   enableFindContentVisibility()  -- force content-visibility open for Find
-//   disableFindContentVisibility() -- restore Find visibility overrides
+//   enableFindContentVisibility()  -- mark and watch the active Find scope
+//   indexFindConversation()        -- cancellable virtualizer scroll walk
+//   disableFindContentVisibility() -- restore exact Find-time mutations
 //
 // The main process calls it by name instead of shipping the full body of
 // buildChatPaneDetectionScript on every export/find/select. The function
@@ -46,6 +47,8 @@
   // Gemini, and Grok without embedded host-page fingerprints.
   var CHAT_ROOT_SELECTORS = [];
   var DOM_CLEANUP_SELECTORS = [];
+  var DOM_CLEANUP_POLICY = null;
+  var DOM_ADAPTER_CONTRACT = null;
   var DOM_PRESERVE_CONTENT_SELECTORS = [
     '[data-preserve]', 'pre', 'code', 'table', 'ul', 'ol',
     'img', 'picture', 'svg', 'canvas', 'video', 'iframe'
@@ -176,59 +179,132 @@
     } catch (e) {}
   }
 
-  function cleanedClone(el, junkSelectors, preserveSelectors) {
-    var clone = el.cloneNode(true);
-    if (junkSelectors && junkSelectors.length) {
-      clone.querySelectorAll(junkSelectors.join(',')).forEach(function (n) {
-        try { n.remove(); } catch (e) {}
-      });
-    }
-    if (preserveSelectors && preserveSelectors.length) {
-      var preserveSel = preserveSelectors.join(',');
-      clone.querySelectorAll(preserveSel).forEach(function (n) {
-        try { n.setAttribute('data-preserve', 'true'); } catch (e) {}
-      });
-      clone.querySelectorAll('div, span').forEach(function (n) {
+  function cleanupCategory(el) {
+    try {
+      if (el.matches('[data-testid*="feedback" i],[data-testid*="thumb" i],[data-testid*="reaction" i]')) return 'feedback';
+      if (el.matches('[data-testid*="copy" i]')) return 'copy';
+      if (el.matches('[role="toolbar"],[class*="toolbar" i],[class*="actionbar" i],[class*="action-bar" i]')) return 'toolbar';
+      if (el.matches('[role="menu"],[role="menuitem"],[aria-haspopup]')) return 'menu';
+      if (el.matches('button,[role="button"]')) return 'button';
+    } catch (e) {}
+    return 'interactive-chrome';
+  }
+  function hasMeaningfulContent(el, preserveSel) {
+    try {
+      if (preserveSel && (el.matches(preserveSel) || el.querySelector(preserveSel))) return true;
+      // A control's own label ("Copy", "Show more", "More actions", etc.) is
+      // chrome, not exported content. Semantic descendants configured by the
+      // app (links, citations, attachments, media, tables, code and lists) are
+      // always meaningful. Unknown non-trivial labels are kept rather than
+      // guessed away; a class substring is never enough, and only a small,
+      // generic chrome vocabulary is disposable.
+      var text = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!text) return false;
+      var chromeLabel = /^(?:copy|copied|like|dislike|thumbs? up|thumbs? down|more (?:actions|options)|show more(?: lines)?|see more|read more|expand|collapse|retry|regenerate(?: response)?|share|edit|delete|menu)$/i;
+      return !chromeLabel.test(text);
+    } catch (e) { return true; }
+  }
+  function isInteractiveChrome(el, interactiveSel) {
+    try {
+      if (interactiveSel && el.matches(interactiveSel)) return true;
+      var tabIndex = el.getAttribute('tabindex');
+      if (tabIndex !== null && Number(tabIndex) >= 0) return true;
+      // A toolbar/action wrapper is chrome only when it actually owns an
+      // interactive descendant. This prevents a broad class candidate from
+      // becoming sufficient evidence to delete a subtree.
+      return !!(interactiveSel && el.querySelector && el.querySelector(interactiveSel));
+    } catch (e) { return false; }
+  }
+  function isAtomicPreservedContent(el) {
+    try {
+      return el.matches(
+        'a[href],pre,code,table,ul,ol,img,picture,svg,canvas,video,iframe,' +
+        '[data-file-name],[data-attachment]'
+      );
+    } catch (e) { return false; }
+  }
+  function emptyCleanupReport() {
+    return {
+      examined: 0,
+      removed: 0,
+      unwrapped: 0,
+      preserved: 0,
+      skippedNonInteractive: 0,
+      categories: {}
+    };
+  }
+  function recordCleanupAction(report, category, action) {
+    var bucket = report.categories[category];
+    if (!bucket) bucket = report.categories[category] = { removed: 0, unwrapped: 0, preserved: 0 };
+    bucket[action] = Number(bucket[action] || 0) + 1;
+  }
+  function cleanupCloneByPredicate(clone) {
+    var policy = DOM_CLEANUP_POLICY || {};
+    var candidates = safeSelectorList(policy.candidateSelectors || DOM_CLEANUP_SELECTORS);
+    var interactive = safeSelectorList(policy.interactiveSelectors || ['button','[role="button"]']);
+    var preserves = (policy.preserveSelectors || []).concat(DOM_PRESERVE_CONTENT_SELECTORS || []);
+    var preserveSel = safeSelectorList(preserves);
+    var report = emptyCleanupReport();
+    if (!candidates) return { clone: clone, report: report };
+    var nodes = [];
+    try { nodes = Array.from(clone.querySelectorAll(candidates)); } catch (e) {}
+    // Process descendants before containers. This lets a toolbar that contains
+    // only controls become empty and removable, while preserved descendants
+    // (for example a citation anchor) survive and cause the shell to unwrap.
+    nodes.sort(function (a, b) {
+      var ad = 0, bd = 0, n = a;
+      while (n && n !== clone) { ad++; n = n.parentElement; }
+      n = b;
+      while (n && n !== clone) { bd++; n = n.parentElement; }
+      return bd - ad;
+    });
+    nodes.forEach(function (el) {
+      if (!el || !el.parentNode) return;
+      report.examined++;
+      var category = cleanupCategory(el);
+      var meaningful = hasMeaningfulContent(el, preserveSel);
+      if (!isInteractiveChrome(el, interactive)) {
+        report.preserved++;
+        report.skippedNonInteractive++;
+        recordCleanupAction(report, category, 'preserved');
+        return;
+      }
+      if (isAtomicPreservedContent(el)) {
+        report.preserved++;
+        recordCleanupAction(report, category, 'preserved');
+        return;
+      }
+      if (meaningful) {
+        // Controls can wrap real labels, citations, images, or file metadata.
+        // Preserve their children and remove only the interactive shell.
         try {
-          if (!n.textContent.trim() && !n.querySelector(preserveSel)) {
-            n.remove();
-          }
+          el.replaceWith.apply(el, Array.from(el.childNodes));
+          report.unwrapped++;
+          recordCleanupAction(report, category, 'unwrapped');
+        } catch (e) {
+          report.preserved++;
+          recordCleanupAction(report, category, 'preserved');
+        }
+      } else {
+        try {
+          el.remove();
+          report.removed++;
+          recordCleanupAction(report, category, 'removed');
         } catch (e) {}
-      });
-    }
-    return clone;
+      }
+    });
+    return { clone: clone, report: report };
   }
-
+  function cleanedClone(el) {
+    var result = cleanupCloneByPredicate(el.cloneNode(true));
+    try { result.clone.__cleanupReport = result.report; } catch (e) {}
+    return result.clone;
+  }
   function cleanupDOMFragment(container) {
-    if (!container) return;
-
-    try {
-      if (DOM_CLEANUP_SELECTORS.length) {
-        container.querySelectorAll(DOM_CLEANUP_SELECTORS.join(',')).forEach(function (el) {
-          try { el.remove(); } catch (e) {}
-        });
-      }
-    } catch (e) {}
-
-    try {
-      if (DOM_PRESERVE_CONTENT_SELECTORS.length) {
-        var preserveSel = DOM_PRESERVE_CONTENT_SELECTORS.join(',');
-
-        container.querySelectorAll(preserveSel).forEach(function (el) {
-          try { el.setAttribute('data-preserve', 'true'); } catch (e) {}
-        });
-
-        container.querySelectorAll('div, span').forEach(function (el) {
-          try {
-            if (!el.textContent.trim() && !el.querySelector(preserveSel)) {
-              el.remove();
-            }
-          } catch (e) {}
-        });
-      }
-    } catch (e) {}
+    if (!container) return emptyCleanupReport();
+    var result = cleanupCloneByPredicate(container);
+    return result.report;
   }
-
   function getSelectionFragment(options) {
     var opts = options || {};
     var clean = opts.clean !== false;
@@ -242,13 +318,14 @@
       var range = sel.getRangeAt(0);
       var container = document.createElement('div');
       container.appendChild(range.cloneContents());
-      if (clean) cleanupDOMFragment(container);
+      var cleanupReport = clean ? cleanupDOMFragment(container) : null;
 
       return {
         ok: true,
         hasSelection: true,
         html: container.innerHTML,
-        text: String(sel.toString() || '')
+        text: String(sel.toString() || ''),
+        cleanupReport: cleanupReport
       };
     } catch (e) {
       return {
@@ -269,8 +346,26 @@
     var scrollIntoView = !!opts.scrollIntoView;
     var markForExport  = !!opts.markForExport;
 
-    var best = pickBest();
-    if (!best) return null;
+    var rootHit = findCapability('chatRoot');
+    if (!rootHit || !rootHit.ok || !rootHit.element) return null;
+    var requiredLevel = markForExport ? 'destructive' : 'read';
+    var requiredConfidence = capabilityThreshold(requiredLevel);
+    if (Number(rootHit.confidence || 0) < requiredConfidence) {
+      return {
+        ok: false,
+        reason: 'low-confidence-chat-root',
+        confidence: Number(rootHit.confidence || 0),
+        evidence: rootHit.evidence || [],
+        warnings: rootHit.warnings || [],
+        requiredConfidence: requiredConfidence,
+        operationLevel: requiredLevel
+      };
+    }
+    var best = {
+      el: rootHit.element,
+      sel: rootHit.selector,
+      score: Number(rootHit.confidence || 0)
+    };
 
     if (scrollIntoView) {
       try { best.el.scrollIntoView({ block: 'start', inline: 'nearest' }); } catch (e) {}
@@ -290,9 +385,12 @@
     }
 
     var html = '';
+    var cleanupReport = null;
     if (includeHtml) {
-      if (cleanupJunk && DOM_CLEANUP_SELECTORS.length) {
-        html = cleanedClone(best.el, DOM_CLEANUP_SELECTORS, DOM_PRESERVE_CONTENT_SELECTORS).outerHTML;
+      if (cleanupJunk) {
+        var cleaned = cleanupCloneByPredicate(best.el.cloneNode(true));
+        html = cleaned.clone.outerHTML;
+        cleanupReport = cleaned.report;
       } else {
         html = best.el.outerHTML;
       }
@@ -313,9 +411,14 @@
       html: html,
       textLength: String(best.el.innerText || '').length,
       score: Number(best.score || 0),
+      confidence: Number(rootHit.confidence || 0),
+      evidence: rootHit.evidence || [],
+      warnings: rootHit.warnings || [],
+      fallbackTier: rootHit.tier || 'none',
       selectedTextLength: selectedTextLength,
       markerApplied: markForExport,
-      markerAttr: markForExport ? EXPORT_MARKER_ATTR : null
+      markerAttr: markForExport ? EXPORT_MARKER_ATTR : null,
+      cleanupReport: cleanupReport
     };
   }
 
@@ -1444,6 +1547,26 @@
       if (!chatPane) {
         return { ok: false, error: 'chat pane not found' };
       }
+      var rootCap = DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.capabilities &&
+        DOM_ADAPTER_CONTRACT.capabilities.chatRoot || {};
+      var rootAssessment = scoreCapability(
+        'chatRoot',
+        chatPane,
+        DOM_ADAPTER_CONTRACT || {},
+        capabilityMetadataForElement(chatPane, rootCap),
+        {}
+      );
+      var destructiveThreshold = capabilityThreshold('destructive');
+      if (rootAssessment.confidence < destructiveThreshold) {
+        return {
+          ok: false,
+          reason: 'low-confidence-chat-root',
+          confidence: rootAssessment.confidence,
+          requiredConfidence: destructiveThreshold,
+          evidence: rootAssessment.evidence,
+          warnings: rootAssessment.warnings
+        };
+      }
 
       var hidden = [];
       var overridden = [];
@@ -1573,7 +1696,10 @@
         hiddenCount: hidden.length,
         overriddenCount: overridden.length,
         rootOverrideCount: rootOverrides.length,
-        rowMinSizeOverrideApplied: !!rowMinSizeStyle
+        rowMinSizeOverrideApplied: !!rowMinSizeStyle,
+        confidence: rootAssessment.confidence,
+        evidence: rootAssessment.evidence,
+        warnings: rootAssessment.warnings
       };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -1681,9 +1807,23 @@
       var preserve = Array.isArray(preserveSelectors)
         ? preserveSelectors.slice()
         : DOM_PRESERVE_CONTENT_SELECTORS.slice();
-
-      var preserveSel = preserve.join(',');
       var clone = root.firstElementChild || root;
+      var cleanup = cleanupCloneByPredicate(clone);
+      clone = cleanup.clone;
+
+      // Mark protected nodes before classes/data attributes are stripped. Some
+      // preservation evidence (citation/reference test IDs, attachment data,
+      // file classes) would otherwise disappear before the empty-wrapper pass.
+      var policyPreserves = DOM_CLEANUP_POLICY && DOM_CLEANUP_POLICY.preserveSelectors || [];
+      var preserveSel = safeSelectorList(preserve.concat(policyPreserves));
+      if (preserveSel) {
+        try {
+          if (clone.matches && clone.matches(preserveSel)) clone.setAttribute('data-export-preserve', '1');
+          clone.querySelectorAll(preserveSel).forEach(function (n) {
+            try { n.setAttribute('data-export-preserve', '1'); } catch (e) {}
+          });
+        } catch (e) {}
+      }
 
       try {
         clone.querySelectorAll('[class]').forEach(function (n) {
@@ -1703,7 +1843,7 @@
             Array.from(n.attributes || []).forEach(function (a) {
               var name = String(a.name || '').toLowerCase();
               if (
-                name.indexOf('data-') === 0 ||
+                (name.indexOf('data-') === 0 && name !== 'data-export-preserve') ||
                 name.indexOf('aria-') === 0 ||
                 name === 'role' ||
                 name === 'tabindex'
@@ -1721,26 +1861,31 @@
 
       if (preserveSel) {
         try {
-          clone.querySelectorAll(preserveSel).forEach(function (n) {
-            try { n.setAttribute('data-preserve', 'true'); } catch (e) {}
-          });
-        } catch (e) {}
-
-        try {
           clone.querySelectorAll('div, span').forEach(function (n) {
             try {
-              if (!String(n.textContent || '').trim() && !n.querySelector(preserveSel)) {
+              if (
+                !String(n.textContent || '').trim() &&
+                !n.hasAttribute('data-export-preserve') &&
+                !n.querySelector('[data-export-preserve]')
+              ) {
                 n.remove();
               }
             } catch (e) {}
           });
         } catch (e) {}
       }
+      try {
+        if (clone.removeAttribute) clone.removeAttribute('data-export-preserve');
+        clone.querySelectorAll('[data-export-preserve]').forEach(function (n) {
+          try { n.removeAttribute('data-export-preserve'); } catch (e) {}
+        });
+      } catch (e) {}
 
       return {
         ok: true,
         title: String(document.title || ''),
-        html: clone.innerHTML
+        html: clone.innerHTML,
+        cleanupReport: cleanup.report
       };
     } catch (e) {
       return {
@@ -1984,6 +2129,29 @@
     var scrollerCandidatesForDiag = [];
     var scroller = findBestChatScroller(root, scrollerCandidatesForDiag);
 
+    if (scroller) {
+      var virtualCap = DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.capabilities &&
+        DOM_ADAPTER_CONTRACT.capabilities.virtualizer || {};
+      var virtualMeta = capabilityMetadataForElement(scroller, virtualCap);
+      if (virtualMeta.tiers.indexOf('behavioral') < 0) virtualMeta.tiers.push('behavioral');
+      var virtualAssessment = scoreCapability(
+        'virtualizer', scroller, DOM_ADAPTER_CONTRACT || {}, virtualMeta, { root: root }
+      );
+      var virtualLevel = restoreScrollTop ? 'interact' : 'destructive';
+      var virtualThreshold = capabilityThreshold(virtualLevel);
+      if (virtualAssessment.confidence < virtualThreshold) {
+        return Promise.resolve({
+          ok: false,
+          reason: 'low-confidence-virtualizer',
+          confidence: virtualAssessment.confidence,
+          requiredConfidence: virtualThreshold,
+          operationLevel: virtualLevel,
+          evidence: virtualAssessment.evidence,
+          warnings: virtualAssessment.warnings
+        });
+      }
+    }
+
     // pdfPrepare() can flatten a real nested virtualizer before hydration:
     // its scroll range becomes zero while HTML becomes scrollable. Scrolling
     // HTML in that state feeds the document's growing print height back into
@@ -2182,13 +2350,14 @@
   //
   // Handles, inside the marked pane (or document if no marker is set):
   //   1. <details>                          -> set .open = true
-  //   2. [aria-expanded="false"] (buttons)  -> click(), then set aria-expanded
+  //   2. [aria-expanded="false"] (buttons)  -> click and verify state change
   //   3. [data-state="closed"]              -> .click() if it has a handler
   // Returns counts. The actual openings are intentionally not undone --
   // the prep/restore lifecycle is responsible for any rollback the caller
   // wants. For PDF the snapshot is read-only so leaving them open is fine.
   // -------------------------------------------------------------------------
   function expandForPrint(options) {
+    return (async function () {
     var opts = options || {};
     // When true, leave chain-of-thought reasoning controls alone so the
     // dedicated expandReasoningForPrint() pass can handle them.
@@ -2295,13 +2464,58 @@
     }
 
     var details = 0, ariaButtons = 0, dataState = 0, skipped = 0, rolledBack = 0, reasoningSkipped = 0;
+    var lowConfidenceSkipped = 0, behaviorVerified = 0, behaviorUnverified = 0;
     var opened = []; // for rollback on menu detection
+    var disclosureThreshold = capabilityThreshold('interact');
+    var disclosureCap = DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.capabilities &&
+      DOM_ADAPTER_CONTRACT.capabilities.disclosureControl || {};
+    function disclosureAssessment(control) {
+      return scoreCapability(
+        'disclosureControl',
+        control,
+        DOM_ADAPTER_CONTRACT || {},
+        capabilityMetadataForElement(control, disclosureCap),
+        { root: root }
+      );
+    }
+    function disclosureState(control) {
+      var controlled = controlledRegionInsideRoot(control);
+      var hidden = null;
+      try {
+        hidden = controlled ? !!(controlled.hidden || controlled.getAttribute('aria-hidden') === 'true') : null;
+      } catch (e) {}
+      return {
+        expanded: control && control.getAttribute ? control.getAttribute('aria-expanded') : null,
+        state: control && control.getAttribute ? control.getAttribute('data-state') : null,
+        controlledHidden: hidden,
+        detailsOpen: control && control.tagName === 'SUMMARY' && control.parentElement &&
+          control.parentElement.tagName === 'DETAILS' ? !!control.parentElement.open : null
+      };
+    }
+    function stateChanged(before, after) {
+      return before.expanded !== after.expanded ||
+        before.state !== after.state ||
+        before.controlledHidden !== after.controlledHidden ||
+        before.detailsOpen !== after.detailsOpen;
+    }
 
     // 1) <details> -- always safe, never opens a portal.
     try {
       var ds = root.querySelectorAll('details:not([open])');
       for (var i = 0; i < ds.length; i++) {
-        try { ds[i].open = true; details++; } catch (e) {}
+        var summary = null;
+        try { summary = ds[i].querySelector('summary'); } catch (e) {}
+        var detailsScore = summary ? disclosureAssessment(summary) : null;
+        if (!summary || detailsScore.confidence < disclosureThreshold) {
+          lowConfidenceSkipped++;
+          continue;
+        }
+        try {
+          var detailsBefore = disclosureState(summary);
+          ds[i].open = true;
+          opened.push({ el: summary, kind: 'details', before: detailsBefore });
+          details++;
+        } catch (e) {}
       }
     } catch (e) {}
 
@@ -2313,12 +2527,14 @@
         if (isReasoningControl(b)) { reasoningSkipped++; continue; }
         if (looksLikeMenuTrigger(b)) { skipped++; continue; }
         if (!looksLikeContentDisclosure(b)) { skipped++; continue; }
+        var assessment = disclosureAssessment(b);
+        if (assessment.confidence < disclosureThreshold) { lowConfidenceSkipped++; continue; }
         try {
+          var before = disclosureState(b);
           b.click();
-          opened.push({ el: b, kind: 'aria' });
+          opened.push({ el: b, kind: 'aria', before: before });
           ariaButtons++;
         } catch (e) {}
-        try { b.setAttribute('aria-expanded', 'true'); } catch (e) {}
       }
     } catch (e) {}
 
@@ -2332,13 +2548,31 @@
         if (looksLikeMenuTrigger(c)) { skipped++; continue; }
         // Accept only accordion-shaped triggers: has aria-controls into root.
         if (!controlledRegionInsideRoot(c)) { skipped++; continue; }
+        var closedAssessment = disclosureAssessment(c);
+        if (closedAssessment.confidence < disclosureThreshold) { lowConfidenceSkipped++; continue; }
         try {
+          var closedBefore = disclosureState(c);
           c.click();
-          opened.push({ el: c, kind: 'dataState' });
+          opened.push({ el: c, kind: 'dataState', before: closedBefore });
           dataState++;
         } catch (e) {}
       }
     } catch (e) {}
+
+    // Let framework-managed state updates commit before evaluating behavior.
+    // This avoids reporting a false failure for React controls whose ARIA or
+    // controlled-region state changes on the next render turn.
+    await new Promise(function (resolve) {
+      try {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () { setTimeout(resolve, 0); });
+        });
+      } catch (e) { setTimeout(resolve, 0); }
+    });
+    for (var v = 0; v < opened.length; v++) {
+      if (stateChanged(opened[v].before, disclosureState(opened[v].el))) behaviorVerified++;
+      else behaviorUnverified++;
+    }
 
     // 4) Sanity sweep: if anything we clicked caused a new menu/dialog/listbox
     //    to appear, roll those clicks back. This catches the failure mode
@@ -2353,8 +2587,14 @@
     if (newMenu) {
       for (var o = opened.length - 1; o >= 0; o--) {
         try {
-          opened[o].el.click();          // toggle closed
-          opened[o].el.setAttribute('aria-expanded', 'false');
+          if (opened[o].kind === 'details' && opened[o].el.parentElement) {
+            opened[o].el.parentElement.open = !!opened[o].before.detailsOpen;
+          } else {
+            opened[o].el.click();          // toggle closed
+          }
+          if (opened[o].before && opened[o].before.expanded !== null) {
+            opened[o].el.setAttribute('aria-expanded', opened[o].before.expanded);
+          }
           rolledBack++;
         } catch (e) {}
       }
@@ -2366,14 +2606,18 @@
 
     return {
       ok: true,
-      details: details,
-      ariaButtons: ariaButtons - (newMenu ? rolledBack : 0),
-      dataState: dataState,
+      details: newMenu ? 0 : details,
+      ariaButtons: newMenu ? 0 : ariaButtons,
+      dataState: newMenu ? 0 : dataState,
       skipped: skipped,
+      lowConfidenceSkipped: lowConfidenceSkipped,
+      behaviorVerified: behaviorVerified,
+      behaviorUnverified: behaviorUnverified,
       reasoningSkipped: reasoningSkipped,
       rolledBack: rolledBack,
       menuDetected: !!newMenu
     };
+    })();
   }
 
   // -------------------------------------------------------------------------
@@ -2400,6 +2644,27 @@
     if (!root) return Promise.resolve({ ok: false, reason: 'no-marked-pane', html: '' });
 
     var scroller = findBestChatScroller(root, scrollerCandidatesForDiag);
+    if (scroller) {
+      var virtualCap = DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.capabilities &&
+        DOM_ADAPTER_CONTRACT.capabilities.virtualizer || {};
+      var virtualMeta = capabilityMetadataForElement(scroller, virtualCap);
+      if (virtualMeta.tiers.indexOf('behavioral') < 0) virtualMeta.tiers.push('behavioral');
+      var virtualAssessment = scoreCapability(
+        'virtualizer', scroller, DOM_ADAPTER_CONTRACT || {}, virtualMeta, { root: root }
+      );
+      var interactThreshold = capabilityThreshold('interact');
+      if (virtualAssessment.confidence < interactThreshold) {
+        return Promise.resolve({
+          ok: false,
+          reason: 'low-confidence-virtualizer',
+          confidence: virtualAssessment.confidence,
+          requiredConfidence: interactThreshold,
+          evidence: virtualAssessment.evidence,
+          warnings: virtualAssessment.warnings,
+          html: ''
+        });
+      }
+    }
 
     function settle(ms) {
       return new Promise(function (res) {
@@ -2740,6 +3005,392 @@
     });
   }
 
+  function negativeRegionFor(el, selectors) {
+    var n = el;
+    while (n && n !== document.body) {
+      if (matchesConfiguredSelector(n, selectors)) return elementLabel(n);
+      n = n.parentElement;
+    }
+    return null;
+  }
+  function capabilityThreshold(level) {
+    var thresholds = DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.thresholds || {};
+    var fallback = level === 'destructive' ? 85 : (level === 'interact' ? 70 : 55);
+    var configured = Number(thresholds[level]);
+    return isFinite(configured) && configured >= 0 ? configured : fallback;
+  }
+  function candidateRecord(list, el, tier, selector) {
+    if (!el || el.nodeType !== 1) return;
+    var existing = null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].element === el) { existing = list[i]; break; }
+    }
+    if (!existing) {
+      existing = { element: el, tiers: [], selectors: [] };
+      list.push(existing);
+    }
+    if (tier && existing.tiers.indexOf(tier) < 0) existing.tiers.push(tier);
+    if (selector && existing.selectors.indexOf(selector) < 0) existing.selectors.push(selector);
+  }
+  function queryCapabilityCandidates(list, selectors, tier) {
+    if (!Array.isArray(selectors)) return;
+    for (var i = 0; i < selectors.length; i++) {
+      var selector = String(selectors[i] || '').trim();
+      if (!selector) continue;
+      try {
+        Array.from(document.querySelectorAll(selector)).forEach(function (el) {
+          candidateRecord(list, el, tier, selector);
+        });
+      } catch (e) {}
+    }
+  }
+  function stableAttributeEvidence(el, hints) {
+    var raw = '';
+    try {
+      raw = String(el.id || '') + ' ' + String(el.getAttribute('data-testid') || '');
+    } catch (e) {}
+    raw = raw.trim().toLowerCase();
+    if (!raw) return { score: 0, label: '' };
+    var wanted = Array.isArray(hints) ? hints : [];
+    for (var i = 0; i < wanted.length; i++) {
+      if (raw.indexOf(String(wanted[i] || '').toLowerCase()) >= 0) {
+        return { score: 15, label: 'stable attribute hint' };
+      }
+    }
+    return { score: 6, label: 'generic id/test id' };
+  }
+  function capabilityMetadataForElement(el, cap) {
+    var meta = { tiers: [], selectors: [] };
+    var groups = [
+      { tier: 'semantic', selectors: cap && cap.semanticSelectors || [] },
+      { tier: 'configured', selectors: cap && cap.selectors || [] }
+    ];
+    for (var i = 0; i < groups.length; i++) {
+      for (var j = 0; j < groups[i].selectors.length; j++) {
+        var selector = String(groups[i].selectors[j] || '').trim();
+        if (!selector) continue;
+        try {
+          if (el.matches(selector)) {
+            if (meta.tiers.indexOf(groups[i].tier) < 0) meta.tiers.push(groups[i].tier);
+            if (meta.selectors.indexOf(selector) < 0) meta.selectors.push(selector);
+          }
+        } catch (e) {}
+      }
+    }
+    return meta;
+  }
+  function rowsAreOrdered(rows) {
+    if (!Array.isArray(rows) || rows.length < 2) return false;
+    var lastIndex = null;
+    for (var i = 0; i < rows.length; i++) {
+      try {
+        var currentIndexRaw =
+          rows[i].getAttribute('aria-posinset') ||
+          rows[i].getAttribute('data-index') ||
+          rows[i].getAttribute('data-item-index');
+        var currentIndex = currentIndexRaw === null || currentIndexRaw === ''
+          ? null
+          : Number(currentIndexRaw);
+        if (currentIndex !== null && isFinite(currentIndex) && lastIndex !== null && currentIndex < lastIndex) return false;
+        if (currentIndex !== null && isFinite(currentIndex)) lastIndex = currentIndex;
+        // DOCUMENT_POSITION_PRECEDING (2) means the visually later row occurs
+        // earlier in DOM order, which is inconsistent with export ordering.
+        if (i + 1 < rows.length && (rows[i].compareDocumentPosition(rows[i + 1]) & 2)) return false;
+      } catch (e) {}
+    }
+    return true;
+  }
+  function verifyComposerFocus(el) {
+    var previous = null;
+    try {
+      previous = document.activeElement;
+      el.focus({ preventScroll: true });
+      var focused = document.activeElement === el || (el.contains && el.contains(document.activeElement));
+      if (previous && previous !== el && previous.focus) previous.focus({ preventScroll: true });
+      return !!focused;
+    } catch (e) {
+      try { if (previous && previous.focus) previous.focus(); } catch (_) {}
+      return false;
+    }
+  }
+  function verifyScrollBehavior(el) {
+    try {
+      var range = scrollRange(el);
+      if (range <= 8) return false;
+      var before = Number(el.scrollTop || 0);
+      var target = before < range ? Math.min(range, before + Math.min(24, range)) : Math.max(0, before - 24);
+      el.scrollTop = target;
+      var moved = Math.abs(Number(el.scrollTop || 0) - before) > 1;
+      el.scrollTop = before;
+      return moved;
+    } catch (e) { return false; }
+  }
+  function relationToRoot(el, root) {
+    if (!el || !root) return '';
+    try {
+      if (root === el) return 'root';
+      if (root.contains(el)) return 'inside-root';
+      if (el.contains(root)) return 'owns-root';
+      var a = el.parentElement;
+      while (a && a !== document.body) {
+        if (a.contains(root)) return 'shared-shell';
+        a = a.parentElement;
+      }
+    } catch (e) {}
+    return '';
+  }
+  function scoreCapability(name, el, contract, meta, context) {
+    contract = contract || {};
+    meta = meta || { tiers: [], selectors: [] };
+    context = context || {};
+    var caps = contract.capabilities || {};
+    var cap = caps[name] || {};
+    var evidence = [], warnings = [], score = 0;
+    var negative = negativeRegionFor(el, contract.negativeRegionSelectors || []);
+    if (visible(el)) { score += 15; evidence.push('visible'); }
+    else warnings.push('not currently visible');
+
+    if (meta.tiers && meta.tiers.indexOf('configured') >= 0) {
+      score += 8;
+      evidence.push('configured selector evidence');
+    }
+    var stable = stableAttributeEvidence(el, cap.stableAttributeHints || []);
+    if (stable.score) { score += stable.score; evidence.push(stable.label); }
+
+    var role = String(el.getAttribute && el.getAttribute('role') || '').toLowerCase();
+    if (name === 'chatRoot') {
+      if (role === 'feed' || role === 'log') { score += 25; evidence.push('semantic ' + role); }
+      else if (role === 'main' || el.tagName === 'MAIN') { score += 10; evidence.push('semantic main region'); }
+      var rowSel = safeSelectorList(cap.repeatedDescendants || []);
+      var rowNodes = [];
+      try { rowNodes = getDiagnosticRows(el); } catch (e) {}
+      if (!rowNodes.length) {
+        try { rowNodes = rowSel ? Array.from(el.querySelectorAll(rowSel)) : []; } catch (e) {}
+      }
+      if (rowNodes.length >= 2) {
+        score += Math.min(35, 15 + rowNodes.length);
+        evidence.push(rowNodes.length + ' repeated message descendants');
+        if (rowsAreOrdered(rowNodes)) { score += 10; evidence.push('row order verified'); }
+        else warnings.push('row order not verified');
+      } else {
+        warnings.push('no repeated message structure');
+      }
+      var sc = findBestChatScroller(el, null);
+      if (sc) { score += 20; evidence.push('scroll owner'); }
+      else warnings.push('no scroll owner');
+    }
+
+    if (name === 'messageRow') {
+      if (role === 'article' || el.tagName === 'ARTICLE') { score += 30; evidence.push('semantic article'); }
+      var rowRelation = relationToRoot(el, context.root);
+      if (rowRelation === 'inside-root') { score += 20; evidence.push('inside selected root'); }
+      else if (context.root) warnings.push('outside selected root');
+      try {
+        var textLength = String(el.innerText || el.textContent || '').trim().length;
+        if (textLength > 0) { score += 10; evidence.push('non-empty row'); }
+        var siblings = el.parentElement ? el.parentElement.children.length : 0;
+        if (siblings >= 2) { score += 10; evidence.push('repeated sibling rows'); }
+      } catch (e) {}
+    }
+
+    if (name === 'composer') {
+      var editable = !!(el.isContentEditable || role === 'textbox' || el.tagName === 'TEXTAREA');
+      if (editable) { score += 30; evidence.push('editable textbox'); }
+      try {
+        if (!el.disabled && !el.readOnly && el.getAttribute('aria-disabled') !== 'true') {
+          score += 10;
+          evidence.push('enabled editor');
+        }
+        if (el.tabIndex >= 0 || el.isContentEditable || el.tagName === 'TEXTAREA') {
+          score += 5;
+          evidence.push('focusable editor');
+        }
+      } catch (e) {}
+      if (context.verifyBehavior) {
+        if (verifyComposerFocus(el)) { score += 10; evidence.push('input focus verified'); }
+        else warnings.push('input focus not verified');
+      }
+      var composerRelation = relationToRoot(el, context.root);
+      if (composerRelation) { score += 15; evidence.push('proximate to chat root'); }
+      else if (context.root) warnings.push('not proximate to chat root');
+    }
+
+    if (name === 'disclosureControl') {
+      var isDisclosure = !!(el.hasAttribute && (el.hasAttribute('aria-expanded') || el.tagName === 'SUMMARY'));
+      if (isDisclosure) { score += 30; evidence.push('disclosure state'); }
+      var disclosureRelation = relationToRoot(el, context.root);
+      if (disclosureRelation === 'inside-root') { score += 20; evidence.push('inside selected root'); }
+      else if (context.root) warnings.push('outside selected root');
+      try {
+        var messageSel = safeSelectorList(DOM_COLLECTION_SELECTORS);
+        var owningMessage = messageSel && el.closest ? el.closest(messageSel) : null;
+        if (owningMessage && (!context.root || context.root.contains(owningMessage))) {
+          score += 15;
+          evidence.push('inside message row');
+        }
+      } catch (e) {}
+      try {
+        var controls = String(el.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean);
+        var targetInside = controls.some(function (id) {
+          var target = document.getElementById(id);
+          return !!(target && (!context.root || context.root.contains(target)));
+        });
+        if (targetInside) { score += 15; evidence.push('controlled region resolved'); }
+        else if (el.tagName === 'SUMMARY' && el.parentElement && el.parentElement.tagName === 'DETAILS') {
+          score += 15;
+          evidence.push('native disclosure target');
+        } else warnings.push('no resolved controlled region');
+      } catch (e) {}
+    }
+
+    if (name === 'virtualizer') {
+      var range = scrollRange(el);
+      if (range > 8) { score += 20; evidence.push('scroll range'); }
+      else warnings.push('no measurable scroll range');
+      if (verifyScrollBehavior(el)) {
+        score += 15;
+        evidence.push('scroll movement verified');
+      } else if (range > 8) warnings.push('scroll movement not verified');
+      if (isScrollableStyle(el)) { score += 10; evidence.push('scroll ownership style'); }
+      var virtualRelation = relationToRoot(el, context.root);
+      if (virtualRelation === 'inside-root' || virtualRelation === 'owns-root' || virtualRelation === 'root') {
+        score += 20;
+        evidence.push('structurally related to chat root');
+      } else if (context.root) {
+        warnings.push('not structurally related to chat root');
+      }
+    }
+
+    if (negative) { score -= 60; warnings.push('inside negative region: ' + negative); }
+    score = Math.max(0, Math.min(100, Math.round(score)));
+    var tier = evidence.some(function (x) { return /^semantic |editable textbox|disclosure state/.test(x); })
+      ? 'semantic-structural'
+      : (evidence.indexOf('configured selector evidence') >= 0 ? 'structural-stable' : 'structural');
+    return {
+      element: el,
+      selector: meta.selectors && meta.selectors[0] || null,
+      confidence: score,
+      evidence: evidence,
+      warnings: warnings,
+      tier: tier
+    };
+  }
+  function collectCapabilityCandidates(name, cap, contract, context) {
+    var candidates = [];
+    queryCapabilityCandidates(candidates, cap.semanticSelectors || [], 'semantic');
+    queryCapabilityCandidates(candidates, cap.selectors || [], 'configured');
+
+    if (name === 'chatRoot') {
+      // A selector drift must not make discovery impossible. Promote ancestors
+      // of repeated message-shaped nodes as structural root candidates.
+      var rowSelectors = cap.repeatedDescendants || [];
+      var rows = [];
+      queryCapabilityCandidates(rows, rowSelectors, 'message-evidence');
+      var ancestorCounts = new Map();
+      for (var i = 0; i < rows.length && i < 200; i++) {
+        var n = rows[i].element && rows[i].element.parentElement;
+        var depth = 0;
+        while (n && n !== document.body && depth++ < 7) {
+          ancestorCounts.set(n, Number(ancestorCounts.get(n) || 0) + 1);
+          n = n.parentElement;
+        }
+      }
+      ancestorCounts.forEach(function (count, ancestor) {
+        if (count >= 2) candidateRecord(candidates, ancestor, 'structural', '');
+      });
+      try {
+        candidateRecord(candidates, document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]'), 'marker', '');
+      } catch (e) {}
+    }
+    if (name === 'messageRow' && context.root) {
+      try {
+        getDiagnosticRows(context.root).forEach(function (row) {
+          candidateRecord(candidates, row, 'structural', '');
+        });
+      } catch (e) {}
+    }
+    if (name === 'virtualizer' && context.root) {
+      try { candidateRecord(candidates, findBestChatScroller(context.root, null), 'behavioral', ''); } catch (e) {}
+    }
+    return candidates;
+  }
+  function findCapability(name, suppliedContext) {
+    var contract = DOM_ADAPTER_CONTRACT || {};
+    var cap = contract.capabilities && contract.capabilities[name];
+    if (!cap) return { ok: false, capability: name, confidence: 0, evidence: [], warnings: ['capability not configured'] };
+    var context = suppliedContext || { root: null };
+    if (name !== 'chatRoot' && !context.root) {
+      var rootHit = findCapability('chatRoot');
+      context.root = rootHit && rootHit.element || null;
+    }
+    var candidates = collectCapabilityCandidates(name, cap, contract, context);
+    var scored = candidates.map(function (candidate) {
+      return scoreCapability(name, candidate.element, contract, candidate, context);
+    });
+    scored.sort(function (a,b) { return b.confidence - a.confidence; });
+    var best = scored[0];
+    if (!best) return { ok: false, capability: name, confidence: 0, evidence: [], warnings: ['no candidates'] };
+    return {
+      ok: true,
+      capability: name,
+      element: best.element,
+      selector: best.selector,
+      confidence: best.confidence,
+      evidence: best.evidence,
+      warnings: best.warnings,
+      tier: best.tier
+    };
+  }
+  function countStableRowIdentifiers(rows) {
+    var count = 0;
+    var rowCap = DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.capabilities &&
+      DOM_ADAPTER_CONTRACT.capabilities.messageRow || {};
+    for (var i = 0; i < rows.length; i++) {
+      try {
+        if (rows[i].getAttribute('data-message-id')) { count++; continue; }
+        if (stableAttributeEvidence(rows[i], rowCap.stableAttributeHints || []).score >= 15) count++;
+      } catch (e) {}
+    }
+    return count;
+  }
+  function getDomAdapterHealth() {
+    var names = ['chatRoot','messageRow','composer','disclosureControl','virtualizer'];
+    var result = { ok: true, adapterVersion: RENDERER_AGENT_VERSION, contractVersion: Number(DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.version || 0), capabilities: {}, activeFallbackTier: 'none' };
+    var root = findCapability('chatRoot');
+    names.forEach(function (name) {
+      var hit = name === 'chatRoot' ? root : findCapability(name, {
+        root: root.element || null,
+        verifyBehavior: name === 'composer'
+      });
+      result.capabilities[name] = {
+        found: !!hit.ok && Number(hit.confidence || 0) >= capabilityThreshold('read'),
+        confidence: Number(hit.confidence || 0),
+        evidence: hit.evidence || [],
+        warnings: hit.warnings || [],
+        label: hit.element ? elementLabel(hit.element) : null,
+        tier: hit.tier || 'none'
+      };
+    });
+    result.selectedRoot = root.element ? elementLabel(root.element) : null;
+    result.selectedRootConfidence = Number(root.confidence || 0);
+    result.activeFallbackTier = root.tier || 'none';
+    var rows = root.element ? getDiagnosticRows(root.element) : [];
+    var stableRows = countStableRowIdentifiers(rows);
+    var scroller = root.element ? findBestChatScroller(root.element, null) : null;
+    result.messageRowCount = rows.length;
+    result.exportThresholds = (DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.thresholds) || {};
+    result.exportCompleteness = {
+      readReady: Number(root.confidence || 0) >= capabilityThreshold('read'),
+      destructiveReady: Number(root.confidence || 0) >= capabilityThreshold('destructive'),
+      orderedRows: rowsAreOrdered(rows),
+      stableRowIdentifiers: stableRows,
+      stableRowIdentifierCoveragePct: rows.length ? Math.round((stableRows / rows.length) * 100) : 0,
+      scrollerFound: !!scroller,
+      scrollerRange: scroller ? scrollRange(scroller) : 0,
+      warnings: rows.length && stableRows === 0 ? ['no stable message identifiers'] : []
+    };
+    return result;
+  }
   function init(config) {
     var c = config || {};
     if (Array.isArray(c.chatRootSelectors) && c.chatRootSelectors.length) {
@@ -2747,6 +3398,12 @@
     }
     if (Array.isArray(c.junkSelectors)) {
       DOM_CLEANUP_SELECTORS = c.junkSelectors.slice();
+    }
+    if (c.cleanupPolicy && typeof c.cleanupPolicy === 'object') {
+      DOM_CLEANUP_POLICY = c.cleanupPolicy;
+    }
+    if (c.domAdapterContract && typeof c.domAdapterContract === 'object') {
+      DOM_ADAPTER_CONTRACT = c.domAdapterContract;
     }
     if (Array.isArray(c.preserveSelectors) && c.preserveSelectors.length) {
       DOM_PRESERVE_CONTENT_SELECTORS = c.preserveSelectors.slice();
@@ -2818,16 +3475,17 @@
   }
 
   // -------------------------------------------------------------------------
-  // Find-in-page: force content-visibility open under the configured chat root
+  // Find-in-page visibility and virtualized-conversation indexing
   //
-  // This is the JS half of the Find visibility override. The CSS half lives
-  // in lib/layout-css.js and is injected by the main process. This method
-  // is called by layout-css.js via the renderer-agent seam so it also runs
-  // in every subframe.
-  //
-  // State is stored on window with generic __appRenderer_* keys so the
-  // shared agent stays project-neutral.
+  // The main process injects a high-specificity stylesheet. This agent only
+  // marks the matched chat root and its ancestor chain, then verifies targeted
+  // nodes in case a host rule still wins the cascade. Every inline style or
+  // marker mutation is recorded before the first write and restored exactly.
   // -------------------------------------------------------------------------
+  var FIND_ROOT_ATTR = 'data-app-find-root';
+  var FIND_ANCESTOR_ATTR = 'data-app-find-ancestor';
+  var findVisibilityState = null;
+
   function findVisibilityRoot() {
     try {
       for (var i = 0; i < CHAT_ROOT_SELECTORS.length; i++) {
@@ -2838,203 +3496,375 @@
     return null;
   }
 
-  function findVisibilityForce(el, counter) {
+  function findVisibilityMutationEntry(state, el) {
+    if (!state || !el || el.nodeType !== 1) return null;
+    var entry = state.mutations.get(el);
+    if (!entry) {
+      entry = { styles: new Map(), attributes: new Map() };
+      state.mutations.set(el, entry);
+      state.touched.add(el);
+    }
+    return entry;
+  }
+
+  function findVisibilitySetStyle(state, el, property, value, priority) {
+    try {
+      var entry = findVisibilityMutationEntry(state, el);
+      if (!entry) return;
+      if (!entry.styles.has(property)) {
+        var had = false;
+        try {
+          for (var i = 0; i < el.style.length; i++) {
+            if (el.style.item(i) === property) { had = true; break; }
+          }
+        } catch (e) {}
+        entry.styles.set(property, {
+          had: had,
+          value: el.style.getPropertyValue(property),
+          priority: el.style.getPropertyPriority(property)
+        });
+      }
+      el.style.setProperty(property, value, priority || '');
+    } catch (e) {}
+  }
+
+  function findVisibilitySetAttribute(state, el, name, value) {
+    try {
+      var entry = findVisibilityMutationEntry(state, el);
+      if (!entry) return;
+      if (!entry.attributes.has(name)) {
+        entry.attributes.set(name, {
+          had: el.hasAttribute(name),
+          value: el.getAttribute(name)
+        });
+      }
+      el.setAttribute(name, value);
+    } catch (e) {}
+  }
+
+  function findVisibilityRestoreMutations(state) {
+    if (!state) return 0;
+    var restored = 0;
+    state.touched.forEach(function (el) {
+      var entry = state.mutations.get(el);
+      if (!entry || !el) return;
+      entry.styles.forEach(function (previous, property) {
+        try {
+          if (previous.had) {
+            el.style.setProperty(property, previous.value, previous.priority);
+          } else {
+            el.style.removeProperty(property);
+          }
+          restored++;
+        } catch (e) {}
+      });
+      entry.attributes.forEach(function (previous, name) {
+        try {
+          if (previous.had) el.setAttribute(name, previous.value);
+          else el.removeAttribute(name);
+          restored++;
+        } catch (e) {}
+      });
+    });
+    state.touched.clear();
+    return restored;
+  }
+
+  function findVisibilityMarkScope(state) {
+    var root = state && state.root;
+    if (!root) return;
+    findVisibilitySetAttribute(state, root, FIND_ROOT_ATTR, '1');
+    var node = root.parentElement;
+    while (node) {
+      findVisibilitySetAttribute(state, node, FIND_ANCESTOR_ATTR, '1');
+      if (node === document.documentElement) break;
+      node = node.parentElement;
+    }
+  }
+
+  function findVisibilityForceFallback(state, el, counter) {
     try {
       if (!el || el.nodeType !== 1) return;
       var cs = getComputedStyle(el);
-      if (cs.contentVisibility === 'auto' || cs.contentVisibility === 'hidden') {
-        el.style.setProperty('content-visibility', 'visible', 'important');
-        el.style.setProperty('contain-intrinsic-size', 'auto', 'important');
-        el.style.setProperty('contain', 'none', 'important');
-        if (counter) counter.n = (counter.n || 0) + 1;
-      }
+      if (cs.contentVisibility !== 'auto' && cs.contentVisibility !== 'hidden') return;
+      findVisibilitySetStyle(state, el, 'content-visibility', 'visible', 'important');
+      findVisibilitySetStyle(state, el, 'contain-intrinsic-size', 'auto', 'important');
+      findVisibilitySetStyle(state, el, 'contain', 'none', 'important');
+      if (counter) counter.n = (counter.n || 0) + 1;
     } catch (e) {}
   }
 
-  function findVisibilityGetScrollParent(el) {
+  function findVisibilityCheckNode(state, node, includeDescendants, counter) {
+    if (!state || !node || node.nodeType !== 1 || !state.root) return;
     try {
-      var p = el && el.parentElement;
-      while (p && p !== document.body) {
-        var s = getComputedStyle(p);
-        if (
-          (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
-          p.scrollHeight > p.clientHeight + 10
-        ) {
-          return p;
-        }
-        p = p.parentElement;
-      }
+      if (node !== state.root && !state.root.contains(node)) return;
+    } catch (e) { return; }
+
+    findVisibilityForceFallback(state, node, counter);
+    if (!includeDescendants || !node.querySelectorAll) return;
+
+    // CSS handles the normal case. JS checks only likely inline clamps and
+    // configured virtualizer nodes in the newly-added subtree.
+    var selectors = [
+      '[style*="content-visibility" i]',
+      '[style*="contain" i]'
+    ].concat(VIRTUALIZER_SELECTORS || []);
+    var selectorList = safeSelectorList(selectors);
+    if (!selectorList) return;
+    try {
+      node.querySelectorAll(selectorList).forEach(function (el) {
+        findVisibilityForceFallback(state, el, counter);
+      });
     } catch (e) {}
-    return el || document.body;
+  }
+
+  function findVisibilityFlushTargetedChecks(state) {
+    if (!state) return;
+    if (state.checkTimer) {
+      try { clearTimeout(state.checkTimer); } catch (e) {}
+      state.checkTimer = null;
+    }
+    var pending = state.pending;
+    state.pending = new Map();
+    pending.forEach(function (includeDescendants, node) {
+      findVisibilityCheckNode(state, node, includeDescendants, null);
+    });
+  }
+
+  function findVisibilityScheduleCheck(state, node, includeDescendants) {
+    if (!state || !node || node.nodeType !== 1) return;
+    var prior = state.pending.get(node) || false;
+    state.pending.set(node, prior || !!includeDescendants);
+    if (state.checkTimer) return;
+    state.checkTimer = setTimeout(function () {
+      findVisibilityFlushTargetedChecks(state);
+    }, 80);
+  }
+
+  function findVisibilityGetScrollPlan(state) {
+    var root = state && state.root;
+    if (!root || state.scrollDone) {
+      return { needsScrollWalk: false, scroller: null, range: 0 };
+    }
+    try {
+      var candidates = [];
+      var scroller = findBestChatScroller(root, candidates);
+      var virtualizer = null;
+      if (scroller && matchesAnyVirtualizerSelector(scroller)) virtualizer = scroller;
+      if (!virtualizer) virtualizer = firstConfiguredDescendant(root, VIRTUALIZER_SELECTORS);
+      var range = scrollRange(scroller);
+      return {
+        needsScrollWalk: !!(scroller && virtualizer && range > 8),
+        scroller: scroller,
+        range: range,
+        scrollerLabel: elementLabel(scroller),
+        candidates: candidates.slice(0, 12)
+      };
+    } catch (e) {
+      return {
+        needsScrollWalk: false,
+        scroller: null,
+        range: 0,
+        error: String((e && e.message) || e)
+      };
+    }
   }
 
   function enableFindContentVisibility() {
-    return (async function () {
-      try {
-        var chatRoot = findVisibilityRoot();
+    try {
+      var chatRoot = findVisibilityRoot();
+      if (!chatRoot) {
+        return { ok: true, rootFound: false, needsScrollWalk: false, overridden: 0 };
+      }
+
+      if (findVisibilityState && findVisibilityState.root !== chatRoot) {
+        disableFindContentVisibility();
+      }
+
+      var state = findVisibilityState;
+      if (!state) {
+        state = {
+          root: chatRoot,
+          observer: null,
+          checkTimer: null,
+          pending: new Map(),
+          mutations: new WeakMap(),
+          touched: new Set(),
+          scrollDone: false,
+          walkId: 0,
+          cancelRequested: false,
+          walking: false
+        };
+        findVisibilityState = state;
+        findVisibilityMarkScope(state);
+
         var counter = { n: 0 };
+        findVisibilityCheckNode(state, chatRoot, true, counter);
 
-        // Walk ancestors of chat root.
-        if (chatRoot) {
-          var node = chatRoot.parentElement;
-          while (node && node !== document.documentElement) {
-            findVisibilityForce(node, counter);
-            node = node.parentElement;
-          }
-        }
-
-        // Walk all descendants.
-        var scope = chatRoot || document.body;
-        try {
-          scope.querySelectorAll('*').forEach(function (el) {
-            findVisibilityForce(el, counter);
-          });
-        } catch (e) {}
-
-        // One-time scroll-to-render pass so IntersectionObserver-based
-        // virtualization mounts every row before Find highlights them.
-        if (!window.__appRenderer_findVisScrollDone && chatRoot) {
-          window.__appRenderer_findVisScrollDone = true;
-
-          try {
-            var sp = findVisibilityGetScrollParent(chatRoot);
-            var savedTop = sp.scrollTop;
-            var origOF = sp.style.overflow;
-            var origMH = sp.style.maxHeight;
-
-            sp.style.setProperty('overflow', 'visible', 'important');
-            sp.style.setProperty('max-height', 'none', 'important');
-            void sp.offsetHeight;
-
-            await new Promise(function (r) {
-              requestAnimationFrame(function () {
-                requestAnimationFrame(r);
-              });
-            });
-
-            var total = sp.scrollHeight;
-            var view = sp.clientHeight || 500;
-            var step = Math.max(view * 0.75, 200);
-
-            for (var pos = 0; pos <= total; pos += step) {
-              sp.scrollTop = pos;
-              await new Promise(function (r) { setTimeout(r, 30); });
+        state.observer = new MutationObserver(function (mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var mutation = mutations[i];
+            if (mutation.type === 'attributes') {
+              findVisibilityScheduleCheck(state, mutation.target, false);
+              continue;
             }
-
-            sp.scrollTop = total;
-            await new Promise(function (r) { setTimeout(r, 30); });
-
-            try {
-              scope.querySelectorAll('*').forEach(function (el) {
-                findVisibilityForce(el, counter);
-              });
-            } catch (e) {}
-
-            sp.style.overflow = origOF;
-            sp.style.maxHeight = origMH;
-            sp.scrollTop = savedTop;
-          } catch (e) {
-            try {
-              console.warn('[renderer-agent] enableFindContentVisibility scroll-to-render failed:', {
-                error: String((e && e.message) || e)
-              });
-            } catch (_) {}
-          }
-        }
-
-        try { void document.body.offsetHeight; } catch (e) {}
-
-        // MutationObserver: keep new nodes overridden while Find is open.
-        if (window.__appRenderer_findVisObs) {
-          try { window.__appRenderer_findVisObs.disconnect(); } catch (e) {}
-        }
-
-        var obs = new MutationObserver(function (muts) {
-          for (var m = 0; m < muts.length; m++) {
-            var mut = muts[m];
-            if (mut.type === 'attributes') {
-              findVisibilityForce(mut.target, counter);
-            }
-            if (mut.type === 'childList') {
-              var added = mut.addedNodes || [];
-              for (var n = 0; n < added.length; n++) {
-                if (added[n].nodeType !== 1) continue;
-                findVisibilityForce(added[n], counter);
-                try {
-                  added[n].querySelectorAll('*').forEach(function (el) {
-                    findVisibilityForce(el, counter);
-                  });
-                } catch (e) {}
+            if (mutation.type !== 'childList') continue;
+            var added = mutation.addedNodes || [];
+            for (var j = 0; j < added.length; j++) {
+              if (added[j].nodeType === 1) {
+                findVisibilityScheduleCheck(state, added[j], true);
               }
             }
           }
         });
-
-        obs.observe(document.body, {
+        state.observer.observe(chatRoot, {
           attributes: true,
           attributeFilter: ['style', 'class'],
           childList: true,
           subtree: true
         });
+        state.initialOverrides = counter.n || 0;
+      } else {
+        // Re-assert markers without scanning the full conversation. The
+        // stylesheet immediately covers all existing and future descendants.
+        findVisibilityMarkScope(state);
+        findVisibilityScheduleCheck(state, chatRoot, false);
+      }
 
-        window.__appRenderer_findVisObs = obs;
+      var plan = findVisibilityGetScrollPlan(state);
+      return {
+        ok: true,
+        rootFound: true,
+        needsScrollWalk: !!plan.needsScrollWalk,
+        scrollerRange: Number(plan.range || 0),
+        scrollerLabel: plan.scrollerLabel || '',
+        overridden: Number(state.initialOverrides || 0)
+      };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
 
-        // Periodic sweep to catch anything the observer missed (Fluent's
-        // virtualizer sometimes re-hides rows after a short debounce).
-        if (window.__appRenderer_findVisInterval) {
-          try { clearInterval(window.__appRenderer_findVisInterval); } catch (e) {}
+  function indexFindConversation(options) {
+    var opts = options || {};
+    var state = findVisibilityState;
+    if (!state || !state.root) {
+      return Promise.resolve({ ok: false, reason: 'find-visibility-not-enabled' });
+    }
+    var plan = findVisibilityGetScrollPlan(state);
+    if (!plan.needsScrollWalk || !plan.scroller) {
+      state.scrollDone = true;
+      return Promise.resolve({ ok: true, reason: 'scroll-walk-not-needed', steps: 0 });
+    }
+
+    var scroller = plan.scroller;
+    var savedTop = Number(scroller.scrollTop || 0);
+    var stepDelayMs = Math.max(10, Number(opts.stepDelayMs || 30));
+    var maxSteps = Math.max(1, Number(opts.maxSteps || 800));
+    var maxStuckPasses = Math.max(1, Number(opts.maxStuckPasses || 3));
+    var walkId = ++state.walkId;
+    state.cancelRequested = false;
+    state.walking = true;
+
+    function cancelled() {
+      return !findVisibilityState || state.cancelRequested || state.walkId !== walkId;
+    }
+    function settle(ms) {
+      return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    return (async function () {
+      var steps = 0;
+      var stoppedAt = 'bottom';
+      var maxObservedHeight = Number(scroller.scrollHeight || 0);
+      var stuckPasses = 0;
+      try {
+        try { scroller.scrollTop = 0; } catch (e) {}
+        await settle(stepDelayMs * 2);
+        var step = Math.max(200, Number(scroller.clientHeight || 500) * 0.75);
+        var target = 0;
+
+        while (steps < maxSteps && !cancelled()) {
+          try { scroller.scrollTop = target; } catch (e) {}
+          steps++;
+          await settle(stepDelayMs);
+          if (cancelled()) break;
+          findVisibilityFlushTargetedChecks(state);
+
+          var height = Number(scroller.scrollHeight || 0);
+          if (height > maxObservedHeight + 4) {
+            maxObservedHeight = height;
+            stuckPasses = 0;
+          }
+          if (target + step >= height) {
+            try { scroller.scrollTop = height; } catch (e) {}
+            await settle(stepDelayMs * 2);
+            if (cancelled()) break;
+            var nextHeight = Number(scroller.scrollHeight || 0);
+            if (nextHeight > maxObservedHeight + 4) {
+              maxObservedHeight = nextHeight;
+              stuckPasses = 0;
+              target = Number(scroller.scrollTop || 0);
+              continue;
+            }
+            stuckPasses++;
+            if (stuckPasses >= maxStuckPasses) break;
+            target = nextHeight;
+            continue;
+          }
+          target += step;
         }
 
-        window.__appRenderer_findVisInterval = setInterval(function () {
-          try {
-            var s = findVisibilityRoot() || document.body;
-            s.querySelectorAll('*').forEach(function (el) {
-              findVisibilityForce(el);
-            });
-          } catch (e) {}
-        }, 2000);
+        if (cancelled()) stoppedAt = 'cancelled';
+        else if (steps >= maxSteps) stoppedAt = 'max-steps';
+        else state.scrollDone = true;
 
-        return { ok: true, overridden: counter.n || 0 };
+        return {
+          ok: true,
+          cancelled: stoppedAt === 'cancelled',
+          steps: steps,
+          stoppedAt: stoppedAt,
+          finalHeight: maxObservedHeight,
+          restoredScrollTop: true
+        };
       } catch (e) {
-        return { ok: false, error: String((e && e.message) || e) };
+        return {
+          ok: false,
+          cancelled: cancelled(),
+          steps: steps,
+          error: String((e && e.message) || e)
+        };
+      } finally {
+        try { scroller.scrollTop = savedTop; } catch (e) {}
+        if (state.walkId === walkId) state.walking = false;
       }
     })();
   }
 
+  function cancelFindContentVisibilityIndexing() {
+    var state = findVisibilityState;
+    if (!state) return { ok: true, cancelled: false };
+    state.cancelRequested = true;
+    state.walkId++;
+    return { ok: true, cancelled: !!state.walking };
+  }
+
   function disableFindContentVisibility() {
     try {
-      if (window.__appRenderer_findVisObs) {
-        try { window.__appRenderer_findVisObs.disconnect(); } catch (e) {}
-        try { delete window.__appRenderer_findVisObs; } catch (e) {
-          window.__appRenderer_findVisObs = null;
-        }
+      var state = findVisibilityState;
+      if (!state) return { ok: true, restored: 0 };
+      state.cancelRequested = true;
+      state.walkId++;
+      if (state.observer) {
+        try { state.observer.disconnect(); } catch (e) {}
       }
-
-      if (window.__appRenderer_findVisInterval) {
-        try { clearInterval(window.__appRenderer_findVisInterval); } catch (e) {}
-        try { delete window.__appRenderer_findVisInterval; } catch (e) {
-          window.__appRenderer_findVisInterval = null;
-        }
+      if (state.checkTimer) {
+        try { clearTimeout(state.checkTimer); } catch (e) {}
       }
-
-      try { delete window.__appRenderer_findVisScrollDone; } catch (e) {
-        window.__appRenderer_findVisScrollDone = false;
-      }
-
-      document.querySelectorAll('[style]').forEach(function (el) {
-        try {
-          if (
-            el.style.getPropertyValue('content-visibility') === 'visible' &&
-            el.style.getPropertyPriority('content-visibility') === 'important'
-          ) {
-            el.style.removeProperty('content-visibility');
-            el.style.removeProperty('contain-intrinsic-size');
-            el.style.removeProperty('contain');
-          }
-        } catch (e) {}
-      });
-
-      return { ok: true };
+      state.pending.clear();
+      var restored = findVisibilityRestoreMutations(state);
+      findVisibilityState = null;
+      return { ok: true, restored: restored };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }
@@ -3054,22 +3884,16 @@
   //   { ok: false, error }
   // -------------------------------------------------------------------------
   function findFirstChatInput() {
-    if (!Array.isArray(CHAT_INPUT_SELECTORS) || !CHAT_INPUT_SELECTORS.length) {
-      return null;
-    }
-    for (var i = 0; i < CHAT_INPUT_SELECTORS.length; i++) {
-      var selector = CHAT_INPUT_SELECTORS[i];
-      if (!selector) continue;
-      try {
-        var el = document.querySelector(selector);
-        if (!el) continue;
-        var r = el.getBoundingClientRect && el.getBoundingClientRect();
-        var visible = !!r && r.width > 0 && r.height > 0;
-        if (!visible) continue;
-        return { el: el, selector: selector };
-      } catch (e) {}
-    }
-    return null;
+    var root = findCapability('chatRoot');
+    var hit = findCapability('composer', { root: root.element || null, verifyBehavior: true });
+    if (!hit || !hit.ok || hit.confidence < capabilityThreshold('interact')) return null;
+    return {
+      el: hit.element,
+      selector: hit.selector,
+      confidence: hit.confidence,
+      evidence: hit.evidence,
+      warnings: hit.warnings
+    };
   }
 
   function waitForChatInputReady(options) {
@@ -3094,7 +3918,14 @@
 
       var immediate = findFirstChatInput();
       if (immediate) {
-        resolve({ ok: true, ready: true, selector: immediate.selector });
+        resolve({
+          ok: true,
+          ready: true,
+          selector: immediate.selector,
+          confidence: immediate.confidence,
+          evidence: immediate.evidence,
+          warnings: immediate.warnings
+        });
         return;
       }
 
@@ -3113,7 +3944,14 @@
 
         obs = new MutationObserver(function () {
           var hit = findFirstChatInput();
-          if (hit) finish({ ok: true, ready: true, selector: hit.selector });
+          if (hit) finish({
+            ok: true,
+            ready: true,
+            selector: hit.selector,
+            confidence: hit.confidence,
+            evidence: hit.evidence,
+            warnings: hit.warnings
+          });
         });
 
         obs.observe(document.documentElement || document.body, {
@@ -3199,22 +4037,9 @@
   // Multiline editors only -- CHAT_INPUT_SELECTORS is supplied by each app's
   // lib/chat-dom.js, so a bare <input> (sidebar search) is never a candidate.
   function findComposerEditor() {
-    var selectors = (CHAT_INPUT_SELECTORS && CHAT_INPUT_SELECTORS.length)
-      ? CHAT_INPUT_SELECTORS
-      : COMPOSER_FALLBACK_INPUT_SELECTORS;
-    for (var i = 0; i < selectors.length; i++) {
-      var selector = String(selectors[i] || '').trim();
-      if (!selector) continue;
-      try {
-        var candidates = document.querySelectorAll(selector);
-        // Last match wins: when an app renders more than one editor the
-        // composer is the one latest in document order.
-        for (var j = candidates.length - 1; j >= 0; j--) {
-          if (visible(candidates[j])) return candidates[j];
-        }
-      } catch (e) {}
-    }
-    return null;
+    var hit = findCapability('composer');
+    if (!hit || !hit.ok || hit.confidence < capabilityThreshold('interact')) return null;
+    return hit.element;
   }
 
   function findComposerWrapperChain(editor) {
@@ -5029,6 +5854,8 @@ function waitForPrintableAssets(options) {
       pdfRestore: pdfRestore,
       cleanExportHtml: cleanExportHtml,
       enableFindContentVisibility: enableFindContentVisibility,
+      indexFindConversation: indexFindConversation,
+      cancelFindContentVisibilityIndexing: cancelFindContentVisibilityIndexing,
       disableFindContentVisibility: disableFindContentVisibility,
       waitForChatInputReady: waitForChatInputReady,
       updateComposerMarker: updateComposerMarker,
@@ -5054,7 +5881,9 @@ function waitForPrintableAssets(options) {
       requestExpandCancel: requestExpandCancel,
       showExpandOverlay: showExpandOverlay,
       hideExpandOverlay: hideExpandOverlay,
-      measureChatScroller: measureChatScroller
+      measureChatScroller: measureChatScroller,
+      findCapability: findCapability,
+      getDomAdapterHealth: getDomAdapterHealth
     }),
     writable: false,
     configurable: true,
