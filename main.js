@@ -200,17 +200,31 @@ const runtimeConfig = createRuntimeConfig({
     APP_PARTITION = config.partition;
     APP_URL = config.appUrl;
   },
+  onDiagnosticSessionChanged(status) {
+    try { refreshTrayMenu(); } catch {}
+    try {
+      const item = Menu.getApplicationMenu()?.getMenuItemById?.('app-session-diagnostic-session');
+      if (item) item.checked = !!status?.active;
+    } catch {}
+  },
 });
 
 const {
   sanitizeLogFileName,
   getConfigFilePath,
+  getLogsDirectoryPath,
   getLogFilePath,
   getRendererLogFilePath,
   formatConsoleArg,
   appendConsoleLogToFile,
   appendRendererLogToFile,
   attachRendererConsoleCapture,
+  flushLogBuffers,
+  deleteDiagnosticLogFiles,
+  getDiagnosticSessionStatus,
+  startDiagnosticSession,
+  stopDiagnosticSession,
+  shutdownLogging,
   logVerbose,
   makeConsoleMethod,
   applyConsoleLoggingConfig,
@@ -292,7 +306,12 @@ function initSessionHelpers() {
     getAppPartition: () => APP_PARTITION,
     getAppUrl: () => APP_URL,
     getConfigFilePath,
+    getLogsDirectoryPath,
     getLogFilePath,
+    getDiagnosticSessionStatus,
+    startDiagnosticSession,
+    stopDiagnosticSession,
+    deleteDiagnosticLogFiles,
     ensureConfigFile,
     getMainWindow: () => mainWindow,
     getAppIconImage: () => appIconImage,
@@ -315,6 +334,8 @@ function openCurrentUrlExternal(...args) { return initSessionHelpers().openCurre
 function getLogsFolderPath(...args) { return initSessionHelpers().getLogsFolderPath(...args); }
 function openPathWithError(...args) { return initSessionHelpers().openPathWithError(...args); }
 function openLogsFolder(...args) { return initSessionHelpers().openLogsFolder(...args); }
+function toggleDiagnosticSession(...args) { return initSessionHelpers().toggleDiagnosticSession(...args); }
+function deleteDiagnosticLogs(...args) { return initSessionHelpers().deleteDiagnosticLogs(...args); }
 function openConfigFile(...args) { return initSessionHelpers().openConfigFile(...args); }
 function toggleActiveWindowAlwaysOnTop(...args) { return initSessionHelpers().toggleActiveWindowAlwaysOnTop(...args); }
 function showAboutDialog(...args) { return initSessionHelpers().showAboutDialog(...args); }
@@ -526,6 +547,7 @@ function initAppMenu() {
     openFindModal, initFindInPage,
     reloadApp, clearAppCache, clearCookiesAndSignOut,
     copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
+    getDiagnosticSessionStatus, toggleDiagnosticSession, deleteDiagnosticLogs,
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage,
     buildExportProfileMenuTemplate, promptExportWithProfile,
@@ -576,6 +598,9 @@ function initTrayMenu() {
     clearAppCache,
     clearCookiesAndSignOut,
     openLogsFolder,
+    getDiagnosticSessionStatus,
+    toggleDiagnosticSession,
+    deleteDiagnosticLogs,
     openConfigFile,
     showAboutDialog,
     setIsQuitting: (value) => { isQuitting = !!value; },
@@ -677,6 +702,7 @@ function initMainBootstrap() {
     pruneExpiredDirectOpenRequests,
     cleanupTempFiles,
     closeAllQuickChatWindows,
+    shutdownLogging,
   });
   return mainBootstrapInstance;
 }

@@ -3943,6 +3943,7 @@ function waitForPrintableAssets(options) {
     var maxRows = Number(opts.maxRows || 300);
     var previewLen = Number(opts.previewLen || 180);
     var maxReasoningPerRow = Number(opts.maxReasoningPerRow || 6);
+    var includeContent = opts.includeContent === true;
     // Marker separating a turn's user text from the assistant's answer.
     // Caller-supplied so this shared file stays project-neutral.
     var answerMarker = String(opts.answerMarker || 'Copilot said:');
@@ -4033,12 +4034,13 @@ function waitForPrintableAssets(options) {
       var reasoningTextRe = /reasoning|thought|thinking|completed in\s*\d+\s*steps?/i;
       function scanReasoningControls(scope) {
         var results = [];
+        var count = 0;
         try {
           var pool = scope.querySelectorAll(
             '[class*="Reasoning" i],[class*="reasoning" i],' +
             '[aria-expanded],[data-state],button,[role="button"],summary'
           );
-          for (var i = 0; i < pool.length && results.length < maxReasoningPerRow; i++) {
+          for (var i = 0; i < pool.length; i++) {
             var el = pool[i];
             var cls = '';
             try { cls = String(el.className || ''); } catch (e) {}
@@ -4052,16 +4054,19 @@ function waitForPrintableAssets(options) {
             var isReasoning = /reasoning/i.test(cls) ||
               (label.length <= 80 && reasoningTextRe.test(label));
             if (!isReasoning) continue;
-            results.push({
-              label: elementLabel(el),
-              tagName: String(el.tagName || '').toLowerCase(),
-              text: label.slice(0, previewLen),
-              attributes: dumpAttributes(el),
-              controlledRegion: describeControlledRegion(el)
-            });
+            count++;
+            if (includeContent && results.length < maxReasoningPerRow) {
+              results.push({
+                label: elementLabel(el),
+                tagName: String(el.tagName || '').toLowerCase(),
+                text: label.slice(0, previewLen),
+                attributes: dumpAttributes(el),
+                controlledRegion: describeControlledRegion(el)
+              });
+            }
           }
         } catch (e) {}
-        return results;
+        return { count: count, details: results };
       }
 
       var rowEls = getDiagnosticRows(root);
@@ -4105,7 +4110,11 @@ function waitForPrintableAssets(options) {
           var after = t.slice(idx + answerMarker.length).trim();
           after = after.replace(/^copilot\b/i, '').trim();
           after = after.replace(/\bsources\b/gi, '').trim();
-          return { present: true, len: after.length, preview: after.slice(0, previewLen) };
+          return {
+            present: true,
+            len: after.length,
+            preview: includeContent ? after.slice(0, previewLen) : ''
+          };
         }
         var c = { present: false, len: 0, preview: '' };
         var i = { present: false, len: 0, preview: '' };
@@ -4128,6 +4137,7 @@ function waitForPrintableAssets(options) {
         totalAnswerChars: 0,
         totalHiddenChars: 0
       };
+      var reasoningControlCount = 0;
 
       for (var r = 0; r < rowEls.length && r < maxRows; r++) {
         var el2 = rowEls[r];
@@ -4138,6 +4148,8 @@ function waitForPrintableAssets(options) {
         var txt2 = '';
         try { txt2 = String(el2.innerText || el2.textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) {}
         var body2 = answerBodyOf(el2);
+        var reasoning2 = scanReasoningControls(el2);
+        reasoningControlCount += Number(reasoning2.count || 0);
         var role = guessRole(el2);
         var rectH = rect2 ? Math.round(rect2.height) : 0;
         var display2 = cs2 ? String(cs2.display) : '';
@@ -4148,34 +4160,36 @@ function waitForPrintableAssets(options) {
           visibility2 === 'hidden' ||
           (cs2 && Number(cs2.opacity) === 0);
 
-        rows.push({
-          index: r,
-          role: role,
-          label: elementLabel(el2),
-          isConnected: !!el2.isConnected,
-          rectHeight: rectH,
-          offsetHeight: Number(el2.offsetHeight || 0),
-          scrollHeight: Number(el2.scrollHeight || 0),
-          display: display2,
-          visibility: visibility2,
-          opacity: opacity2,
-          contentVisibility: cs2 ? String(cs2.contentVisibility) : '',
-          contain: cs2 ? String(cs2.contain) : '',
-          maxHeight: cs2 ? String(cs2.maxHeight) : '',
-          overflow: cs2 ? String(cs2.overflow) : '',
-          textLength: txt2.length,
-          textHead: txt2.slice(0, previewLen),
-          textTail: txt2.slice(-previewLen),
-          // Answer-body measurements. answerLen is the CSS-independent truth;
-          // answerVisibleLen is what CSS currently exposes; the difference is
-          // text present in the DOM but suppressed from rendering.
-          hasAnswerMarker: body2.hasMarker,
-          answerLen: body2.contentLen,
-          answerVisibleLen: body2.innerLen,
-          answerHiddenChars: body2.hiddenChars,
-          answerPreview: body2.preview,
-          reasoningControls: scanReasoningControls(el2)
-        });
+        if (includeContent) {
+          rows.push({
+            index: r,
+            role: role,
+            label: elementLabel(el2),
+            isConnected: !!el2.isConnected,
+            rectHeight: rectH,
+            offsetHeight: Number(el2.offsetHeight || 0),
+            scrollHeight: Number(el2.scrollHeight || 0),
+            display: display2,
+            visibility: visibility2,
+            opacity: opacity2,
+            contentVisibility: cs2 ? String(cs2.contentVisibility) : '',
+            contain: cs2 ? String(cs2.contain) : '',
+            maxHeight: cs2 ? String(cs2.maxHeight) : '',
+            overflow: cs2 ? String(cs2.overflow) : '',
+            textLength: txt2.length,
+            textHead: txt2.slice(0, previewLen),
+            textTail: txt2.slice(-previewLen),
+            // Answer-body measurements. answerLen is the CSS-independent truth;
+            // answerVisibleLen is what CSS currently exposes; the difference is
+            // text present in the DOM but suppressed from rendering.
+            hasAnswerMarker: body2.hasMarker,
+            answerLen: body2.contentLen,
+            answerVisibleLen: body2.innerLen,
+            answerHiddenChars: body2.hiddenChars,
+            answerPreview: body2.preview,
+            reasoningControls: reasoning2.details
+          });
+        }
 
         if (body2.hasMarker) {
           answerStats.turnsWithMarker++;
@@ -4199,19 +4213,41 @@ function waitForPrintableAssets(options) {
         }
       }
 
-      return {
+      var healthMetrics = {
+        rowCount: Number(rowEls.length || 0),
+        rowsExamined: Number(Math.min(rowEls.length, maxRows) || 0),
+        reasoningControlCount: Number(reasoningControlCount || 0),
+        assistantVisible: Number(summary.assistantVisible || 0),
+        assistantZeroHeight: Number(summary.assistantZeroHeight || 0),
+        assistantHidden: Number(summary.assistantHidden || 0),
+        assistantDisconnected: Number(summary.assistantDisconnected || 0),
+        assistantEmptyText: Number(summary.assistantEmptyText || 0),
+        userVisible: Number(summary.userVisible || 0),
+        unknownVisible: Number(summary.unknownVisible || 0),
+        turnsWithMarker: Number(answerStats.turnsWithMarker || 0),
+        answersPresent: Number(answerStats.answersPresent || 0),
+        answersEmpty: Number(answerStats.answersEmpty || 0),
+        answersHiddenByCss: Number(answerStats.answersHiddenByCss || 0),
+        totalAnswerChars: Number(answerStats.totalAnswerChars || 0),
+        totalHiddenChars: Number(answerStats.totalHiddenChars || 0)
+      };
+      var result = {
         ok: true,
         stage: stage,
-        rootLabel: elementLabel(root),
-        answerMarker: answerMarker,
-        answerStats: answerStats,
-        userHints: userHints,
-        assistantHints: assistantHints,
-        rowCount: rowEls.length,
-        reported: rows.length,
-        assistantSummary: summary,
-        rows: rows
+        healthMetrics: healthMetrics
       };
+      if (includeContent) {
+        result.rootLabel = elementLabel(root);
+        result.answerMarker = answerMarker;
+        result.answerStats = answerStats;
+        result.userHints = userHints;
+        result.assistantHints = assistantHints;
+        result.rowCount = rowEls.length;
+        result.reported = rows.length;
+        result.assistantSummary = summary;
+        result.rows = rows;
+      }
+      return result;
     } catch (e) {
       return { ok: false, stage: stage, error: String((e && e.message) || e) };
     }

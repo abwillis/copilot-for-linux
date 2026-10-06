@@ -39,12 +39,12 @@ const defaultAppConfig = Object.freeze({
   findContentVisibilityOverride: true,
   devToolsEnabled: true,
   enableExportDiagnostics: false,
-  // Conversation export diagnostic: logs per-row user/assistant classification,
-  // geometry, connectivity and reasoning-control attributes at each export
-  // stage. Independent of enableExportDiagnostics so it can be run on demand to
-  // investigate missing assistant answers / unexpanded reasoning. Set false to
-  // silence once the investigation is complete.
-  enableConversationExportDiagnostic: true,
+  // Numeric-only export health metrics are safe to emit during normal use.
+  // Per-row text previews, labels, attributes, and reasoning-control details are
+  // available only while a temporary diagnostic session is active.
+  enableExportHealthMetrics: true,
+  enableConversationExportDiagnostic: false,
+  diagnosticSessionDurationMinutes: 15,
   // Expand chain-of-thought / "Reasoning completed in N steps" panels during
   // PDF export so the full reasoning is captured. Runs after the virtualizer is
   // flattened (all rows mounted). Set false to keep reasoning collapsed in the
@@ -79,15 +79,22 @@ const defaultAppConfig = Object.freeze({
   pdfChunkSize: 50,
   pdfChunkPageHeightPx: 1056,
   enableConsoleLogging: true,
-  enableFileLogging: true,
+  enableFileLogging: false,
   logFileName: 'copilot-for-linux.log',
+  // File writes are buffered and asynchronous. The active file plus four
+  // numbered archives are retained; rotation occurs at either limit.
+  logFlushIntervalMs: 250,
+  logBufferMaxBytes: 65536,
+  logMaxBytes: 5242880,
+  logMaxAgeDays: 7,
+  logMaxFiles: 5,
   // Capture renderer-side console output (renderer/agent.js, preload, and the
   // hosted web app) via Electron's webContents 'console-message' event. Without
   // this, renderer console.log never reaches any file -- which is why the
   // renderer heartbeats added during the PDF export investigation never showed
   // up in the log. Written to rendererLogFileName so the noisy hosted web app
   // cannot drown out the app's own main-process log.
-  enableRendererConsoleCapture: true,
+  enableRendererConsoleCapture: false,
   rendererLogFileName: 'copilot-for-linux-renderer.log',
   // Verbose diagnostic dumps (the multi-hundred-line [conv] detail: /
   // hydrateVirtualizer JSON blobs) are written to the log FILE but kept off the

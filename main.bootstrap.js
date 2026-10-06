@@ -17,7 +17,11 @@ function createMainBootstrap(deps = {}) {
     pruneExpiredDirectOpenRequests,
     cleanupTempFiles,
     closeAllQuickChatWindows,
+    shutdownLogging,
   } = deps;
+
+  let quitCleanupStarted = false;
+  let loggingShutdownComplete = false;
 
   function bootstrapApp() {
     app.setName(appConfig.appName);
@@ -52,8 +56,16 @@ function createMainBootstrap(deps = {}) {
       // Keep tray resident.
     });
 
-    app.on('before-quit', () => {
+    app.on('before-quit', event => {
       if (typeof setIsQuitting === 'function') setIsQuitting(true);
+
+      // Give the asynchronous buffered log writer one chance to drain before
+      // Electron exits. The second app.quit() passes through this guard.
+      if (!loggingShutdownComplete) {
+        event.preventDefault();
+        if (quitCleanupStarted) return;
+        quitCleanupStarted = true;
+      }
 
       try {
         try { pruneExpiredDirectOpenRequests(); } catch {}
@@ -73,6 +85,15 @@ function createMainBootstrap(deps = {}) {
         try { closeAllQuickChatWindows(); } catch {}
         try { cleanupTempFiles(); } catch {}
       } catch {}
+
+      if (!loggingShutdownComplete) {
+        Promise.resolve(
+          typeof shutdownLogging === 'function' ? shutdownLogging() : undefined
+        ).catch(() => {}).finally(() => {
+          loggingShutdownComplete = true;
+          app.quit();
+        });
+      }
     });
   }
 
