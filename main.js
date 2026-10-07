@@ -1,7 +1,7 @@
 // main.js
 'use strict';
 
-const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, shell, ipcMain, dialog, screen, clipboard, session } = require('electron');
+const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, clipboard, session, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -23,6 +23,10 @@ const { createWindowHelpers } = require('./lib/window-helpers');
 const { createMainWindowManager } = require('./lib/main-window');
 const { createMainBootstrap } = require('./main.bootstrap');
 const { createIconHelpers } = require('./lib/icon-helpers');
+const { createSettingsWindow } = require('./lib/settings-window');
+const { createGlobalShortcutManager } = require('./lib/global-shortcuts');
+const { createPermissionManager } = require('./lib/permissions');
+const { createStartupManager } = require('./lib/startup');
 
 // === App-specific modules ===
 const {
@@ -87,6 +91,7 @@ const {
 } = createLayoutCSS({
     rendererApiGlobal: RENDERER_API_GLOBAL,
     dynamicWidth: APP_DYNAMIC_WIDTH,
+    getRuntimeConfig: () => APP_CONFIG,
 });
 
 let __cachedRendererAgentBoot = null;
@@ -111,7 +116,7 @@ function getRendererAgentBoot() {
       dynamicWidthCssVar:    APP_DYNAMIC_WIDTH?.cssVar    || '',
       dynamicWidthMinVw:     APP_DYNAMIC_WIDTH?.minVw     ?? 0,
       dynamicWidthMaxVw:     APP_DYNAMIC_WIDTH?.maxVw     ?? 100,
-      dynamicWidthDefaultVw: APP_DYNAMIC_WIDTH?.defaultVw ?? 100,
+      dynamicWidthDefaultVw: Number(APP_CONFIG?.layoutWidthVw ?? APP_DYNAMIC_WIDTH?.defaultVw ?? 100),
       rendererApiGlobal: RENDERER_API_GLOBAL,
       rendererAgentVersion: RENDERER_AGENT_VERSION,
     });
@@ -242,7 +247,9 @@ const {
   writeConfigFile,
   loadAppConfig,
   ensureConfigFile,
+  updateAppConfig,
   getAppConfig,
+  getStoredAppConfig,
 } = runtimeConfig;
 
 // ============================================================================
@@ -593,7 +600,7 @@ function initAppMenu() {
     appLabel: APP_LABEL,
     openFindModal, initFindInPage,
     reloadApp, clearAppCache, clearCookiesAndSignOut,
-    copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile,
+    copyCurrentUrl, openCurrentUrlExternal, openLogsFolder, openConfigFile, showSettingsWindow,
     getDiagnosticSessionStatus, toggleDiagnosticSession, deleteDiagnosticLogs,
     toggleActiveWindowAlwaysOnTop, showAboutDialog, showApplicationHelp,
     getRuntimeInfo, appIconImage, showSelectorHealth,
@@ -649,6 +656,7 @@ function initTrayMenu() {
     toggleDiagnosticSession,
     deleteDiagnosticLogs,
     openConfigFile,
+    showSettingsWindow,
     showAboutDialog,
     setIsQuitting: (value) => { isQuitting = !!value; },
   });
@@ -657,6 +665,162 @@ function initTrayMenu() {
 function buildTrayMenuTemplate(...args) { return initTrayMenu().buildTrayMenuTemplate(...args); }
 function refreshTrayMenu(...args) { return initTrayMenu().refreshTrayMenu(...args); }
 function createTray(...args) { return initTrayMenu().createTray(...args); }
+
+// ============================================================================
+// Settings and runtime-configurable desktop integrations
+// ============================================================================
+let settingsWindowInstance = null;
+let globalShortcutManagerInstance = null;
+let permissionManagerInstance = null;
+let startupManagerInstance = null;
+
+function initGlobalShortcutManager() {
+  if (globalShortcutManagerInstance) return globalShortcutManagerInstance;
+  globalShortcutManagerInstance = createGlobalShortcutManager({
+    globalShortcut,
+    reveal,
+    getMainWindow: () => mainWindow,
+    createQuickChatWindow,
+    getActiveQuickChatWindow,
+  });
+  return globalShortcutManagerInstance;
+}
+
+function initPermissionManager() {
+  if (permissionManagerInstance) return permissionManagerInstance;
+  permissionManagerInstance = createPermissionManager({
+    dialog,
+    getAppConfig,
+    getAppUrl: () => APP_URL,
+  });
+  return permissionManagerInstance;
+}
+
+function initStartupManager() {
+  if (startupManagerInstance) return startupManagerInstance;
+  startupManagerInstance = createStartupManager({
+    app,
+    fs,
+    path,
+    process,
+    appName: appConfig.appName,
+  });
+  return startupManagerInstance;
+}
+
+function applySpellcheckConfig(config) {
+  try {
+    const languages = config.spellcheckEnabled ? config.spellcheckLanguages : [];
+    session.fromPartition(APP_PARTITION).setSpellCheckerLanguages(languages);
+  } catch (error) {
+    console.error('Failed to apply spellcheck languages:', error);
+    return { key: 'spellcheckLanguages', message: String(error?.message || error) };
+  }
+  return null;
+}
+
+function applyLaunchAtLogin(config) {
+  try {
+    initStartupManager().apply(config);
+  } catch (error) {
+    console.error('Failed to update launch-at-login setting:', error);
+    return { key: 'launchAtLogin', message: String(error?.message || error) };
+  }
+  return null;
+}
+
+async function applyRuntimeSettings(config, previous = {}) {
+  const errors = [];
+  try { nativeTheme.themeSource = config.theme || 'system'; }
+  catch (error) { errors.push({ key: 'theme', message: String(error?.message || error) }); }
+
+  const spellcheckError = applySpellcheckConfig(config);
+  if (spellcheckError) errors.push(spellcheckError);
+  const loginError = applyLaunchAtLogin(config);
+  if (loginError) errors.push(loginError);
+
+  if (previous.showTrayIcon !== config.showTrayIcon) {
+    if (config.showTrayIcon) {
+      if (!tray) createTray();
+    } else if (tray) {
+      try { tray.destroy(); } catch {}
+      tray = null;
+    }
+  }
+
+  if (previous.layoutWidthVw !== config.layoutWidthVw) {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win?.__appRole === 'main' || win?.__appRole === 'quick') {
+        try { await applyDynamicWidth(win); } catch (error) {
+          errors.push({ key: 'layoutWidthVw', message: String(error?.message || error) });
+        }
+      }
+    }
+  }
+
+  const shortcutResult = initGlobalShortcutManager().apply(config);
+  if (!shortcutResult.ok) errors.push(...shortcutResult.errors);
+  try { refreshTrayMenu(); } catch {}
+  return { ok: errors.length === 0, errors };
+}
+
+async function validateRuntimeSettings(config, previous = {}) {
+  if (config.spellcheckEnabled) {
+    const available = (session.availableSpellCheckerLanguages || []).map(value => String(value).toLowerCase());
+    const unsupported = (config.spellcheckLanguages || []).filter(value => !available.includes(String(value).toLowerCase()));
+    if (available.length && unsupported.length) {
+      return {
+        ok: false,
+        errors: [{
+          key: 'spellcheckLanguages',
+          message: `Spellcheck dictionaries are not available for: ${unsupported.join(', ')}`,
+        }],
+      };
+    }
+  }
+
+  if (
+    previous.globalShortcutsEnabled === config.globalShortcutsEnabled &&
+    previous.globalShortcutShowMain === config.globalShortcutShowMain &&
+    previous.globalShortcutNewQuickChat === config.globalShortcutNewQuickChat &&
+    previous.globalShortcutShowQuickChat === config.globalShortcutShowQuickChat
+  ) {
+    return { ok: true, errors: [] };
+  }
+  return initGlobalShortcutManager().validate(config, previous);
+}
+
+function configureRuntimeServices() {
+  const config = getAppConfig();
+  try { nativeTheme.themeSource = config.theme || 'system'; } catch {}
+  applySpellcheckConfig(config);
+  applyLaunchAtLogin(config);
+  initPermissionManager().configure(session.fromPartition(APP_PARTITION));
+  initGlobalShortcutManager().apply(config);
+}
+
+function initSettingsWindow() {
+  if (settingsWindowInstance) return settingsWindowInstance;
+  settingsWindowInstance = createSettingsWindow({
+    BrowserWindow,
+    ipcMain,
+    path,
+    dirname: __dirname,
+    IPC,
+    appLabel: APP_LABEL,
+    getAppConfig: getStoredAppConfig,
+    updateAppConfig,
+    validateRuntimeSettings,
+    applyRuntimeSettings,
+    getAppIconImage: () => appIconImage,
+  });
+  settingsWindowInstance.registerIpcHandlers();
+  return settingsWindowInstance;
+}
+
+function showSettingsWindow() {
+  return initSettingsWindow().showSettingsWindow(BrowserWindow.getFocusedWindow() || mainWindow);
+}
 
 // ============================================================================
 // Structured selection -> envelope -> quick chat inject (active OR specific #N)
@@ -744,12 +908,14 @@ function initMainBootstrap() {
     setIsQuitting: (value) => { isQuitting = !!value; },
     createWindow,
     createTray,
+    configureRuntimeServices,
     registerDirectOpenIpcHandler: () => registerDirectOpenIpcHandler(IPC),
     registerDirectOpenDownloadHandler,
     pruneExpiredDirectOpenRequests,
     cleanupTempFiles,
     closeAllQuickChatWindows,
     shutdownLogging,
+    unregisterGlobalShortcuts: () => initGlobalShortcutManager().unregisterAll(),
   });
   return mainBootstrapInstance;
 }

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings</title>
+  <link rel="stylesheet" href="./settings.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Settings</h1>
+      <p>Changes are validated locally before config.json is updated.</p>
+    </div>
+    <div id="dirty-badge" class="dirty-badge" hidden>Unsaved changes</div>
+  </header>
+
+  <main>
+    <nav id="settings-nav" aria-label="Settings sections"></nav>
+    <form id="settings-form" novalidate>
+      <div id="form-message" class="form-message" role="status" aria-live="polite"></div>
+      <div id="settings-sections"></div>
+      <footer class="actions">
+        <span id="effect-summary" class="effect-summary"></span>
+        <button id="reset" type="button" class="secondary">Reset</button>
+        <button id="save" type="submit" disabled>Save changes</button>
+      </footer>
+    </form>
+  </main>
+
+  <template id="section-template">
+    <section class="settings-section">
+      <div class="section-heading">
+        <h2></h2>
+        <p></p>
+      </div>
+      <div class="fields"></div>
+    </section>
+  </template>
+
+  <script src="./settings.js"></script>
+</body>
+</html>

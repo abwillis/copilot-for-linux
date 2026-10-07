@@ -12,12 +12,14 @@ function createMainBootstrap(deps = {}) {
     setIsQuitting,
     createWindow,
     createTray,
+    configureRuntimeServices,
     registerDirectOpenIpcHandler,
     registerDirectOpenDownloadHandler,
     pruneExpiredDirectOpenRequests,
     cleanupTempFiles,
     closeAllQuickChatWindows,
     shutdownLogging,
+    unregisterGlobalShortcuts,
   } = deps;
 
   let quitCleanupStarted = false;
@@ -29,15 +31,14 @@ function createMainBootstrap(deps = {}) {
 
     app.whenReady().then(() => {
       loadAppConfig();
+      if (typeof configureRuntimeServices === 'function') configureRuntimeServices();
 
       const config = (typeof getAppConfig === 'function') ? getAppConfig() : {};
-      if (config.enableDirectOpen) {
-        registerDirectOpenIpcHandler();
-        registerDirectOpenDownloadHandler();
-      }
+      registerDirectOpenIpcHandler();
+      registerDirectOpenDownloadHandler();
 
       createWindow();
-      createTray();
+      if (config.showTrayIcon !== false) createTray();
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -53,7 +54,8 @@ function createMainBootstrap(deps = {}) {
     });
 
     app.on('window-all-closed', () => {
-      // Keep tray resident.
+      const config = (typeof getAppConfig === 'function') ? getAppConfig() : {};
+      if (config.showTrayIcon === false) app.quit();
     });
 
     app.on('before-quit', event => {
@@ -68,6 +70,7 @@ function createMainBootstrap(deps = {}) {
       }
 
       try {
+        try { unregisterGlobalShortcuts?.(); } catch {}
         try { pruneExpiredDirectOpenRequests(); } catch {}
 
         const mainWindow = (typeof getMainWindow === 'function') ? getMainWindow() : null;
