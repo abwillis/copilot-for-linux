@@ -36,22 +36,37 @@ const defaultAppConfig = Object.freeze({
   // false to make cleanMarkdown behave like rawMarkdown. rawMarkdown is never
   // affected by this.
   cleanMarkdownStripsJunk: true,
-  // Flatten-retry + scroller-stability. Exporting the same conversation could
-  // yield a half-size file that only completed on a second export: pdfPrepare()
-  // mounts rows and leaves them mounted, so the second run built on the first.
-  // The markdown/HTML/text snapshot now retries the flatten/capture until the
-  // captured content stops growing; both paths first wait for the live scroller
-  // range to hold steady (the app finishing layout) so nothing is captured
-  // mid-layout. All bounded so they can never hang.
-  flattenRetryMaxPasses: 4,
-  flattenRetryBudgetMs: 60000,
-  scrollerStableSamples: 2,
-  scrollerStablePollMs: 400,
-  scrollerStableBudgetMs: 8000,
-  scrollerStableBeforePdf: true,
+  // Conversation capture (export engine v2, lib/conversation-capture.js).
+  // The main process walks the virtualized conversation top to bottom and
+  // persists each logical turn to a temporary disk store. A step is accepted
+  // only when it shares a turn with the previous step (otherwise the step is
+  // halved and retried), so no turn can be skipped regardless of how the
+  // virtualizer re-measures rows. A verification pass re-walks the
+  // conversation unless the page exposes a complete ordinal sequence.
+  exportCaptureSettleMs: 80,             // settle time after each scroll step
+  exportCaptureStepFraction: 0.7,        // step size as a fraction of the viewport
+  exportCaptureMinStepPx: 40,            // smallest step tried before accepting a break
+  exportCaptureTerminalSamples: 3,       // stable samples required at top/bottom
+  exportCaptureVerificationPasses: 2,    // maximum verification passes
+  exportCaptureStuckLimit: 6,            // non-advancing steps before giving up
+  exportCaptureMaxSteps: 50000,
+  exportCaptureBudgetMs: 1800000,        // 30 minutes; raise for extremely long conversations
+  // Large row HTML is streamed through bounded IPC chunks into the disk store.
+  // No complete long-conversation snapshot crosses the renderer/main boundary.
+  exportCaptureIpcChunkBytes: 524288,
+  exportCaptureCallTimeoutMs: 30000,
   defaultExportFormat: 'pdf',
   defaultPaneExportProfile: 'pdf',
   defaultSelectionExportProfile: 'pdf',
+  // Paper treatment for generated HTML/PDF. "match" captures the live
+  // conversation's computed foreground/background colors when the export job
+  // starts; the other modes deliberately override them.
+  exportPaperMode: 'match',
+  // Self-contained HTML drops any remote resource that could not be
+  // materialized. Linked HTML keeps safe http(s) image references and carries
+  // a CSP that still disables scripts, frames, forms, and plugins.
+  exportHtmlRemoveRemoteResources: true,
+  exportIncludeCaptureMetadata: true,
   quickPasteDelayMs: 3000,
   findContentVisibilityOverride: true,
   devToolsEnabled: true,
@@ -95,6 +110,15 @@ const defaultAppConfig = Object.freeze({
   pdfChunkPageThreshold: 50,
   pdfChunkSize: 50,
   pdfChunkPageHeightPx: 1056,
+  // Canonical PDF output is split into static HTML shards before Chromium
+  // lays it out. pageRanges alone do not bound whole-document layout memory.
+  pdfShardMaxTurns: 24,
+  pdfShardMaxHtmlBytes: 6291456,
+  pdfShardRenderTimeoutMs: 120000,
+  // Bound remote image fetches and the cross-turn data-URI cache.
+  exportAssetFetchTimeoutMs: 20000,
+  exportAssetMaxBytes: 26214400,
+  exportAssetCacheMaxBytes: 16777216,
   enableConsoleLogging: true,
   enableFileLogging: false,
   logFileName: 'copilot-for-linux.log',
@@ -130,7 +154,7 @@ module.exports = Object.freeze({
   partitionEnvVar: 'COPILOT_PARTITION',
   layoutObserverGlobal: '__copilot_layoutObserver',
   rendererApiGlobal: '__copilotRenderer',
-  rendererAgentVersion: 3,
+  rendererAgentVersion: 6,
 
   dynamicWidth: Object.freeze({
     cssVar: '--copilot-vw',

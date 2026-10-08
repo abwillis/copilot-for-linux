@@ -86,6 +86,53 @@
   // Attribute used to disambiguate the chosen pane during PDF export.
   var EXPORT_MARKER_ATTR = 'data-pdf-export-target';
 
+  // Monotonic revision used by the main-process ConversationSnapshot cache.
+  // Export-owned mutations are suppressed and reconciled by a content-free
+  // signature when the job ends, so marker/overlay churn cannot invalidate an
+  // otherwise reusable snapshot.
+  var exportMutationRevision = 1;
+  var exportMutationObserver = null;
+  var exportJobState = null;
+  var canonicalCaptureState = null;
+
+  function stableExportFingerprint(value) {
+    var s = String(value || '').replace(/\s+/g, ' ').trim();
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    return String(h >>> 0) + ':' + String(s.length);
+  }
+
+  function ensureExportMutationObserver() {
+    if (exportMutationObserver || !document.documentElement) return;
+    try {
+      exportMutationObserver = new MutationObserver(function (records) {
+        if (exportJobState && exportJobState.active) return;
+        for (var i = 0; i < records.length; i++) {
+          var record = records[i];
+          if (record.type === 'attributes' && record.attributeName === EXPORT_MARKER_ATTR) continue;
+          var target = record.target && record.target.nodeType === 1
+            ? record.target
+            : record.target && record.target.parentElement;
+          try {
+            if (target && target.closest && target.closest('[data-app-export-transient="1"]')) continue;
+          } catch (e) {}
+          exportMutationRevision++;
+          break;
+        }
+      });
+      exportMutationObserver.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['id', 'aria-posinset', 'data-index', 'data-item-index', 'data-message-id', 'src']
+      });
+    } catch (e) { exportMutationObserver = null; }
+  }
+
   function visible(el) {
     if (!el) return false;
     var r = null;
@@ -989,6 +1036,102 @@
     } catch (e) {}
     return null;
   }
+  function logicalRowPosition(node, scroller, root) {
+    try {
+      var current = node;
+      while (current && current !== root && current !== document.body) {
+        var inlineStyle = (current.getAttribute && current.getAttribute('style')) || '';
+        var virtualY = diagnosticParseVirtualY(inlineStyle);
+        if (virtualY !== null) return Math.round(virtualY);
+        var topValue = current.style && current.style.top;
+        if (topValue && /px/i.test(String(topValue))) {
+          var top = Number(String(topValue).replace(/px.*/i, ''));
+          if (isFinite(top)) return Math.round(top);
+        }
+        current = current.parentElement;
+      }
+      var rect = node.getBoundingClientRect && node.getBoundingClientRect();
+      var scrollRect = scroller && scroller.getBoundingClientRect && scroller.getBoundingClientRect();
+      if (rect && scrollRect) {
+        return Math.round(Number(scroller.scrollTop || 0) + (rect.top - scrollRect.top));
+      }
+      if (rect) return Math.round(rect.top);
+    } catch (e) {}
+    return null;
+  }
+
+  function logicalRowAttribute(row, name) {
+    try {
+      var value = row.getAttribute && row.getAttribute(name);
+      if (value) return String(value);
+      var descendant = row.querySelector && row.querySelector('[' + name + ']');
+      value = descendant && descendant.getAttribute(name);
+      return value ? String(value) : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function getLogicalMessageRows(root, scroller) {
+    if (!root || !root.querySelectorAll) return [];
+    var messageSelector = safeSelectorList(DOM_COLLECTION_SELECTORS);
+    if (!messageSelector) return [];
+    var candidates = [];
+    try {
+      if (root.matches && root.matches(messageSelector)) candidates.push(root);
+      candidates = candidates.concat(Array.from(root.querySelectorAll(messageSelector)));
+    } catch (e) {
+      candidates = [];
+    }
+
+    var rows = [];
+    candidates.forEach(function (candidate) {
+      try {
+        if (!candidate || !root.contains(candidate)) return;
+        if (matchesConfiguredSelector(candidate, DOM_COLLECTION_EXCLUDE_SELECTORS)) return;
+        var row = candidate;
+        var parent = candidate.parentElement;
+        while (parent && parent !== root && parent !== scroller && parent !== document.body) {
+          // A virtualizer is a collection container, never one logical turn.
+          if (matchesAnyVirtualizerSelector(parent)) break;
+          if (matchesConfiguredSelector(parent, DOM_COLLECTION_ROW_SELECTORS)) row = parent;
+          parent = parent.parentElement;
+        }
+        if (matchesAnyVirtualizerSelector(row)) row = candidate;
+        if (matchesConfiguredSelector(row, DOM_COLLECTION_EXCLUDE_SELECTORS)) return;
+        var text = String(row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+        var preserveSelector = safeSelectorList(DOM_PRESERVE_CONTENT_SELECTORS);
+        var hasPreserved = false;
+        try { hasPreserved = !!(preserveSelector && row.querySelector(preserveSelector)); } catch (e) {}
+        if (!text && !hasPreserved) return;
+        if (rows.indexOf(row) === -1) rows.push(row);
+      } catch (e) {}
+    });
+
+    // Multiple app selectors often match nested pieces of the same turn
+    // (article -> answer card -> message body). Keep the outermost owner so the
+    // whole turn survives exactly once, but never promote to a virtualizer.
+    rows = rows.filter(function (row, index, list) {
+      return !list.some(function (other) {
+        return other !== row && other.contains && other.contains(row);
+      });
+    });
+    rows.sort(function (a, b) {
+      var aPos = logicalRowPosition(a, scroller, root);
+      var bPos = logicalRowPosition(b, scroller, root);
+      if (aPos !== null && bPos !== null && aPos !== bPos) return aPos - bPos;
+      var aOrdinal = Number(logicalRowAttribute(a, 'aria-posinset') || logicalRowAttribute(a, 'data-index'));
+      var bOrdinal = Number(logicalRowAttribute(b, 'aria-posinset') || logicalRowAttribute(b, 'data-index'));
+      if (isFinite(aOrdinal) && isFinite(bOrdinal) && aOrdinal !== bOrdinal) return aOrdinal - bOrdinal;
+      try {
+        return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+      } catch (e) {
+        return 0;
+      }
+    });
+    return rows;
+  }
+
   function getDiagnosticRows(root) {
     try {
       var baselineRows = pdfLayoutBaseline &&
@@ -1007,6 +1150,12 @@
       }
     } catch (e) {}
     var rows = [];
+    try {
+      rows = getLogicalMessageRows(root, findBestChatScroller(root, null));
+      if (rows.length) return rows;
+    } catch (e) {
+      rows = [];
+    }
     var rowSelector = safeSelectorList(DOM_COLLECTION_ROW_SELECTORS);
     var messageSelector = safeSelectorList(DOM_COLLECTION_SELECTORS);
     function meaningfulDirectChildren(container) {
@@ -1843,7 +1992,11 @@
             Array.from(n.attributes || []).forEach(function (a) {
               var name = String(a.name || '').toLowerCase();
               if (
-                (name.indexOf('data-') === 0 && name !== 'data-export-preserve') ||
+                (name.indexOf('data-') === 0 &&
+                  name !== 'data-export-preserve' &&
+                  name !== 'data-export-logical-turn' &&
+                  name !== 'data-export-order' &&
+                  name !== 'data-collected-chat-export') ||
                 name.indexOf('aria-') === 0 ||
                 name === 'role' ||
                 name === 'tabindex'
@@ -2273,9 +2426,17 @@
           var step = Math.max(200, scroller.clientHeight - 100);
           var target = 0;
           while (steps < maxSteps) {
+            if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+              finish('cancelled');
+              return;
+            }
             try { scroller.scrollTop = target; } catch (e) {}
             steps++;
             await settle(stepDelayMs);
+            if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+              finish('cancelled');
+              return;
+            }
             var h = scroller.scrollHeight;
             if (h > maxObservedHeight) {
               maxObservedHeight = h;
@@ -2764,33 +2925,24 @@
 
     function rowKey(row, scroller, fallbackOrdinal) {
       try {
-        var id = row.getAttribute && row.getAttribute('id');
-        if (id) return 'id:' + id;
-
-        var child = firstConfiguredDescendant(row, DOM_COLLECTION_SELECTORS);
-        if (child) {
-          for (var i = 0; i < DOM_COLLECTION_KEY_ATTRIBUTES.length; i++) {
-            var childAttr = String(DOM_COLLECTION_KEY_ATTRIBUTES[i] || '').trim();
-            if (!childAttr) continue;
-            var childValue = child.getAttribute && child.getAttribute(childAttr);
-            if (childValue) return 'child-' + childAttr + ':' + childValue;
-          }
-          if (child.id) return 'child-id:' + child.id;
-        }
-
-        var dataIndex =
-          (row.getAttribute && (
-            row.getAttribute('data-index') ||
-            row.getAttribute('data-item-index') ||
-            row.getAttribute('aria-posinset')
-          )) || '';
-
-        if (dataIndex) return 'idx:' + dataIndex;
-
-        var y = virtualPosition(row, scroller);
-        if (y !== null) return 'y:' + y;
-
         var text = String(row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+        var y = logicalRowPosition(row, scroller, root);
+        var suffix = ':y:' + (y === null ? 'unknown' : y) + ':sig:' +
+          stableTextHash(text) + ':' + String(text.length || 0);
+        for (var i = 0; i < DOM_COLLECTION_KEY_ATTRIBUTES.length; i++) {
+          var attr = String(DOM_COLLECTION_KEY_ATTRIBUTES[i] || '').trim();
+          if (!attr) continue;
+          var value = logicalRowAttribute(row, attr);
+          if (value) {
+            if (attr === 'data-message-id' || attr === 'id') return attr + ':' + value;
+            return attr + ':' + value + suffix;
+          }
+        }
+        var dataIndex = logicalRowAttribute(row, 'data-index') ||
+          logicalRowAttribute(row, 'data-item-index') ||
+          logicalRowAttribute(row, 'aria-posinset');
+        if (dataIndex) return 'idx:' + dataIndex;
+        if (y !== null) return 'y:' + y + ':sig:' + stableTextHash(text) + ':' + String(text.length || 0);
         return 'sig:' + stableTextHash(text) + ':' + String(text.length || 0) + ':' + fallbackOrdinal;
       } catch (e) {
         return 'fallback:' + fallbackOrdinal;
@@ -2798,77 +2950,79 @@
     }
 
     function collectMountedMessages(map, scroller) {
-      var rows = [];
-
-      // Primary strategy: collect mounted virtualizer rows/items. In Fluent
-      // virtualizer, the durable export unit is usually a mounted row, not a
-      // specific message-looking descendant.
-      try {
-        Array.from(scroller.children || []).forEach(function (child) {
-          if (meaningfulExportNode(child)) rows.push(child);
-        });
-      } catch (e) {}
-
-      // Fallback/augmentation: promote message-ish descendants to their
-      // nearest virtualizer row so card variants not exposed as direct children
-      // still survive the export.
-      var messageSelector = safeSelectorList(DOM_COLLECTION_SELECTORS);
-      if (messageSelector) {
-        try {
-          var descendants = Array.from(root.querySelectorAll(messageSelector));
-        descendants.forEach(function (node) {
-          var row = node;
-          var p = node.parentElement;
-
-          while (p && p !== root && p !== scroller) {
-            try {
-              var pst = (p.getAttribute && p.getAttribute('style')) || '';
-              if (
-                parseVirtualY(pst) !== null ||
-                matchesConfiguredSelector(p, DOM_COLLECTION_ROW_SELECTORS) ||
-                p.parentElement === scroller
-              ) {
-                row = p;
-              }
-            } catch (e) {}
-            p = p.parentElement;
-          }
-
-          if (meaningfulExportNode(row) && rows.indexOf(row) === -1) {
-            rows.push(row);
-          }
-        });
-        } catch (e) {}
-      }
+      var rows = getLogicalMessageRows(root, scroller);
 
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i];
         try {
           if (!meaningfulExportNode(row)) continue;
 
-          var y = virtualPosition(row, scroller);
+          var y = logicalRowPosition(row, scroller, root);
           var key = rowKey(row, scroller, i);
-
-          if (!map.has(key)) {
+          var text = String(row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+          var html = String(row.outerHTML || '');
+          var existing = map.get(key);
+          if (!existing || text.length > existing.textLength || html.length > existing.html.length) {
             map.set(key, {
+              key: key,
               y: y === null ? Number.MAX_SAFE_INTEGER : y,
-              html: row.outerHTML,
-              textPreview: String(row.innerText || row.textContent || '')
-                .replace(/\s+/g, ' ')
-                .trim()
-                .slice(0, 120)
+              order: Number(logicalRowAttribute(row, 'aria-posinset') ||
+                logicalRowAttribute(row, 'data-index') ||
+                logicalRowAttribute(row, 'data-item-index')),
+              html: html,
+              textLength: text.length,
+              fingerprint: stableExportFingerprint(text),
+              textPreview: text.slice(0, 120)
             });
           }
         } catch (e) {}
       }
     }
 
+    function orderedValues(map) {
+      return Array.from(map.values()).sort(function (a, b) {
+        var ao = Number(a.order);
+        var bo = Number(b.order);
+        if (isFinite(ao) && isFinite(bo) && ao !== bo) return ao - bo;
+        var ay = Number(a.y);
+        var by = Number(b.y);
+        if (ay !== by) return ay - by;
+        return String(a.key || '').localeCompare(String(b.key || ''));
+      });
+    }
+
+    function collectedHtml(ordered) {
+      return '<div data-collected-chat-export="1">' +
+        ordered.map(function (item, index) {
+          return '<section data-export-logical-turn="1" data-export-order="' + index + '">' +
+            item.html + '</section>';
+        }).join('\n') +
+        '</div>';
+    }
+
     if (!scroller || scroller === document.body) {
+      var staticCollected = new Map();
+      collectMountedMessages(staticCollected, scroller || root);
+      var staticOrdered = orderedValues(staticCollected);
+      if (!staticOrdered.length) {
+        var rootText = String(root.innerText || root.textContent || '').replace(/\s+/g, ' ').trim();
+        staticOrdered.push({
+          key: 'root',
+          y: 0,
+          order: 0,
+          html: root.outerHTML,
+          textLength: rootText.length,
+          fingerprint: stableExportFingerprint(rootText),
+          textPreview: rootText.slice(0, 120)
+        });
+      }
       return Promise.resolve({
         ok: true,
         reason: 'no-virtualized-scroller',
-        html: root.outerHTML,
-        collected: 1,
+        html: collectedHtml(staticOrdered),
+        collected: staticOrdered.length,
+        logicalTurnCount: staticOrdered.length,
+        messageFingerprints: staticOrdered.map(function (item) { return item.fingerprint; }),
         steps: 0,
         scrollerCandidates: scrollerCandidatesForDiag.slice(0, 12)
       });
@@ -2890,6 +3044,11 @@
         collectMountedMessages(collected, scroller);
 
         while (steps < maxSteps) {
+          if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+            try { scroller.scrollTop = originalScrollTop; } catch (e) {}
+            resolve({ ok: false, reason: 'cancelled', cancelled: true, html: '' });
+            return;
+          }
           try { scroller.scrollTop = target; } catch (e) {}
           steps++;
           await settle(stepDelayMs);
@@ -2938,6 +3097,11 @@
           var tailStart = Math.max(0, bottomRange - ((scroller.clientHeight || 1200) * 4));
 
           for (var tail = tailStart; tail <= bottomRange; tail += tailStep) {
+            if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+              try { scroller.scrollTop = originalScrollTop; } catch (e) {}
+              resolve({ ok: false, reason: 'cancelled', cancelled: true, html: '' });
+              return;
+            }
             try { scroller.scrollTop = tail; } catch (e) {}
             await settle(stepDelayMs * 2);
             collectMountedMessages(collected, scroller);
@@ -2946,6 +3110,11 @@
           // Force exact-bottom pressure multiple times. Some virtualizer builds
           // do not mount the last rows on the first bottom clamp.
           for (var bottomPass = 0; bottomPass < 5; bottomPass++) {
+            if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+              try { scroller.scrollTop = originalScrollTop; } catch (e) {}
+              resolve({ ok: false, reason: 'cancelled', cancelled: true, html: '' });
+              return;
+            }
             try { scroller.scrollTop = bottomRange; } catch (e) {}
             await settle(stepDelayMs * 3);
             collectMountedMessages(collected, scroller);
@@ -2966,9 +3135,7 @@
 
         try { scroller.scrollTop = originalScrollTop; } catch (e) {}
 
-        var ordered = Array.from(collected.values()).sort(function (a, b) {
-          return Number(a.y || 0) - Number(b.y || 0);
-        });
+        var ordered = orderedValues(collected);
 
         var finalRange = scrollRange(scroller);
         var lastY = ordered.length ? Number(ordered[ordered.length - 1].y || 0) : null;
@@ -2977,15 +3144,19 @@
             ? null
             : Math.max(0, finalRange - lastY);
 
-        var html = '<div data-collected-chat-export="1">' +
-          ordered.map(function (x) { return x.html; }).join('\n') +
-          '</div>';
+        var html = collectedHtml(ordered);
+        var fingerprints = ordered.map(function (item) { return item.fingerprint; });
 
         resolve({
           ok: true,
           reason: 'collected',
           html: html,
           collected: collected.size,
+          logicalTurnCount: collected.size,
+          messageFingerprints: fingerprints,
+          firstRowFingerprint: fingerprints[0] || '',
+          lastRowFingerprint: fingerprints.length ? fingerprints[fingerprints.length - 1] : '',
+          monotonicRowOrdering: true,
           steps: steps,
           finalHeight: maxObservedHeight,
           scrollerRange: scrollRange(scroller),
@@ -3001,8 +3172,411 @@
         });
       }
 
-      run();
+      run().catch(function (error) {
+        try { scroller.scrollTop = originalScrollTop; } catch (e) {}
+        resolve({
+          ok: false,
+          reason: 'collector-threw',
+          error: String((error && error.message) || error),
+          html: ''
+        });
+      });
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Incremental conversation capture (export engine v2).
+  //
+  // The main process drives the traversal (lib/conversation-capture.js); this
+  // side only scrolls to a requested offset, lets the virtualizer settle,
+  // optionally expands newly mounted content, and reports what is mounted.
+  //
+  // Contract per batch:
+  //   refs    - EVERY mounted logical turn, in top-to-bottom order, as small
+  //             identity records ({ key, ordinal, setSize, role, y, ... }).
+  //             The main process uses consecutive refs lists to prove that no
+  //             turn was skipped between two scroll positions (continuity).
+  //   records - full HTML only for turns this session has not sent yet, or
+  //             whose content has grown since it was last sent. A turn is
+  //             therefore cloned and transferred once, not once per step.
+  //
+  // Identity keys are computed once per DOM element and cached, so expanding a
+  // turn (which changes its text) does not change its key.
+  // -------------------------------------------------------------------------
+  function canonicalCaptureSettle(ms) {
+    // Timer-driven on purpose: requestAnimationFrame is not delivered while
+    // the window is occluded or throttled, which previously stalled exports.
+    var wait = Math.max(0, Number(ms || 0));
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish() { if (!done) { done = true; resolve(); } }
+      try {
+        requestAnimationFrame(function () { setTimeout(finish, wait); });
+      } catch (e) {}
+      setTimeout(finish, wait + 50);
+    });
+  }
+
+  function canonicalCaptureRole(row) {
+    var user = false;
+    var assistant = false;
+    for (var i = 0; i < DOM_COLLECTION_SELECTORS.length; i++) {
+      var selector = String(DOM_COLLECTION_SELECTORS[i] || '');
+      try {
+        if (!(row.matches(selector) || row.querySelector(selector))) continue;
+        if (/user|request|prompt/i.test(selector)) user = true;
+        if (/assistant|copilot|answer|response/i.test(selector)) assistant = true;
+      } catch (e) {}
+    }
+    if (assistant && !user) return 'assistant';
+    if (user && !assistant) return 'user';
+    if (user && assistant) return 'mixed';
+    return 'unknown';
+  }
+
+  function canonicalRowText(row) {
+    try { return String(row.textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) { return ''; }
+  }
+
+  function canonicalRowIdentity(row) {
+    var result = { sourceKey: '', ordinal: null, setSize: null };
+    function readNumber(value) {
+      if (value === null || value === undefined || value === '') return null;
+      var n = Number(value);
+      return isFinite(n) ? n : null;
+    }
+    try {
+      var messageId = String(row.getAttribute('data-message-id') || '');
+      if (!messageId) {
+        var owner = row.querySelector('[data-message-id]');
+        messageId = String(owner && owner.getAttribute('data-message-id') || '');
+      }
+      if (messageId) result.sourceKey = 'message:' + messageId;
+      if (!result.sourceKey) {
+        var idOwner = /message|turn|response|request/i.test(String(row.id || ''))
+          ? row
+          : row.querySelector('[id*="message" i],[id*="turn" i]');
+        var id = String(idOwner && idOwner.id || '');
+        if (id) result.sourceKey = 'id:' + id;
+      }
+      result.ordinal = readNumber(row.getAttribute('aria-posinset'));
+      if (result.ordinal === null) result.ordinal = readNumber(row.getAttribute('data-index'));
+      if (result.ordinal === null) result.ordinal = readNumber(row.getAttribute('data-item-index'));
+      // aria-setsize is authoritative only on the row itself; nested lists and
+      // citation groups carry their own unrelated set sizes.
+      result.setSize = readNumber(row.getAttribute('aria-setsize'));
+    } catch (e) {}
+    return result;
+  }
+
+  function canonicalRowKey(state, row, role) {
+    var cached = state.keyByElement.get(row);
+    if (cached) return cached;
+    var identity = canonicalRowIdentity(row);
+    var key = '';
+    if (identity.sourceKey) key = identity.sourceKey;
+    else if (identity.ordinal !== null) key = 'ordinal:' + identity.ordinal;
+    else {
+      // Anonymous turn: the leading text is stable while expansion appends
+      // content, so it identifies the turn across scroll positions.
+      var head = canonicalRowText(row).slice(0, 400);
+      key = 'anon:' + role + ':' + stableExportFingerprint(head);
+      var base = key;
+      var n = 1;
+      // Two different mounted elements with identical leading text in the
+      // same batch are different turns; disambiguate deterministically.
+      while (state.batchKeys && state.batchKeys[key]) key = base + '#' + (++n);
+    }
+    state.keyByElement.set(row, key);
+    return key;
+  }
+
+  function canonicalPreservedCount(row) {
+    var selector = safeSelectorList(DOM_PRESERVE_CONTENT_SELECTORS);
+    if (!selector) return 0;
+    try { return row.querySelectorAll(selector).length; } catch (e) { return 0; }
+  }
+
+  function canonicalMediaSignature(row) {
+    try {
+      return Array.from(row.querySelectorAll('img,video,a[href],[data-file-name],[data-attachment]'))
+        .slice(0, 64)
+        .map(function (node) {
+          return String(node.getAttribute('src') || node.getAttribute('href') ||
+            node.getAttribute('data-file-name') || node.getAttribute('data-attachment') ||
+            node.getAttribute('alt') || '');
+        }).join('|');
+    } catch (e) { return ''; }
+  }
+
+  function canonicalDescribeRows(state) {
+    var rows = getLogicalMessageRows(state.root, state.scroller);
+    var described = [];
+    state.batchKeys = {};
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      try {
+        if (!row || !row.isConnected) continue;
+        var text = canonicalRowText(row);
+        var preserved = canonicalPreservedCount(row);
+        if (!text && !preserved) continue;
+        var role = canonicalCaptureRole(row);
+        var key = canonicalRowKey(state, row, role);
+        if (state.batchKeys[key]) continue;
+        state.batchKeys[key] = true;
+        var identity = canonicalRowIdentity(row);
+        var rect = null;
+        try { rect = row.getBoundingClientRect(); } catch (e) {}
+        described.push({
+          row: row,
+          key: key,
+          sourceKey: identity.sourceKey,
+          ordinal: identity.ordinal,
+          setSize: identity.setSize,
+          role: role,
+          textLength: text.length,
+          preservedContentCount: preserved,
+          fingerprint: stableExportFingerprint(text + '\n' + canonicalMediaSignature(row)),
+          y: logicalRowPosition(row, state.scroller, state.root),
+          height: rect ? Math.max(0, Math.round(rect.height || 0)) : 0
+        });
+      } catch (e) {}
+    }
+    state.batchKeys = null;
+    return described;
+  }
+
+  function beginCanonicalConversationCapture(options) {
+    var opts = options || {};
+    if (canonicalCaptureState) {
+      endCanonicalConversationCapture({ sessionId: canonicalCaptureState.sessionId, restoreScrollTop: true });
+    }
+    var root = null;
+    try { root = document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]'); } catch (e) {}
+    if (!root) return { ok: false, reason: 'no-marked-pane' };
+    var scrollerCandidates = [];
+    var scroller = findBestChatScroller(root, scrollerCandidates);
+    if (!scroller) scroller = root;
+    var originalScrollTop = 0;
+    try { originalScrollTop = Number(scroller.scrollTop || 0); } catch (e) {}
+    canonicalCaptureState = {
+      sessionId: String(opts.sessionId || ''),
+      root: root,
+      scroller: scroller,
+      originalScrollTop: originalScrollTop,
+      keyByElement: new WeakMap(),
+      sent: Object.create(null),
+      batchKeys: null,
+      recordSerial: 0,
+      pendingRecords: new Map(),
+      startedAt: Date.now()
+    };
+    return {
+      ok: true,
+      sessionId: canonicalCaptureState.sessionId,
+      range: scrollRange(scroller),
+      clientHeight: Number(scroller.clientHeight || 0),
+      scrollTop: Number(scroller.scrollTop || 0),
+      scrollerLabel: elementLabel(scroller),
+      scrollerCandidates: scrollerCandidates.slice(0, 12)
+    };
+  }
+
+  function captureCanonicalConversationBatch(options) {
+    return (async function () {
+      var opts = options || {};
+      var state = canonicalCaptureState;
+      if (!state || (opts.sessionId && String(opts.sessionId) !== state.sessionId)) {
+        return { ok: false, reason: 'no-canonical-capture-session', records: [], refs: [] };
+      }
+      if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+        return { ok: false, reason: 'cancelled', cancelled: true, records: [], refs: [] };
+      }
+      var root = state.root;
+      var scroller = state.scroller;
+      if (!root || !root.isConnected || !scroller || !scroller.isConnected) {
+        return { ok: false, reason: 'capture-target-detached', records: [], refs: [] };
+      }
+      if (state.pendingRecords && state.pendingRecords.size) {
+        return {
+          ok: false,
+          reason: 'pending-canonical-records-not-released',
+          pendingRecords: state.pendingRecords.size,
+          records: [],
+          refs: []
+        };
+      }
+      var settleMs = Math.max(0, Number(opts.settleMs || 80));
+      var observeOnly = opts.observeOnly === true;
+      // Keys whose previous transfer the main process rejected (a window it
+      // could not link to the previous one) must be sent again.
+      if (Array.isArray(opts.resend)) {
+        for (var r = 0; r < opts.resend.length; r++) {
+          try { delete state.sent[String(opts.resend[r])]; } catch (e) {}
+        }
+      }
+      var rangeBefore = scrollRange(scroller);
+      var requested = opts.target === 'end' ? rangeBefore : Number(opts.target || 0);
+      requested = Math.max(0, Math.min(rangeBefore, isFinite(requested) ? requested : 0));
+      try { scroller.scrollTop = requested; } catch (e) {}
+      await canonicalCaptureSettle(settleMs);
+      // Settle until the virtualizer stops re-measuring (bounded).
+      var lastRange = scrollRange(scroller);
+      for (var s = 0; s < 4; s++) {
+        await canonicalCaptureSettle(settleMs);
+        var nowRange = scrollRange(scroller);
+        if (nowRange === lastRange) break;
+        lastRange = nowRange;
+        if (opts.target === 'end') { try { scroller.scrollTop = nowRange; } catch (e) {} }
+      }
+      if (exportJobState && exportJobState.active && exportJobState.cancelled) {
+        return { ok: false, reason: 'cancelled', cancelled: true, records: [], refs: [] };
+      }
+      var described = canonicalDescribeRows(state);
+      var expanded = false;
+      if (!observeOnly && opts.expandContent !== false) {
+        var hasUnsent = described.some(function (d) { return !state.sent[d.key]; });
+        if (hasUnsent) {
+          try {
+            await expandForPrint({ skipReasoning: false });
+            await canonicalCaptureSettle(settleMs);
+            expanded = true;
+            described = canonicalDescribeRows(state);
+          } catch (e) {}
+        }
+      }
+      var refs = [];
+      var records = [];
+      for (var i = 0; i < described.length; i++) {
+        var d = described[i];
+        refs.push({
+          key: d.key,
+          sourceKey: d.sourceKey,
+          ordinal: d.ordinal,
+          setSize: d.setSize,
+          role: d.role,
+          fingerprint: d.fingerprint,
+          textLength: d.textLength,
+          preservedContentCount: d.preservedContentCount,
+          y: d.y,
+          height: d.height
+        });
+        if (observeOnly) continue;
+        var previous = state.sent[d.key];
+        var grew = previous && (d.textLength > previous.textLength ||
+          d.preservedContentCount > previous.preservedContentCount);
+        if (previous && !grew) continue;
+        var html = '';
+        try { html = String(d.row.outerHTML || ''); } catch (e) {}
+        if (!html) continue;
+        state.sent[d.key] = { textLength: d.textLength, preservedContentCount: d.preservedContentCount };
+        var record = {
+          key: d.key,
+          sourceKey: d.sourceKey,
+          ordinal: d.ordinal,
+          setSize: d.setSize,
+          role: d.role,
+          fingerprint: d.fingerprint,
+          textLength: d.textLength,
+          preservedContentCount: d.preservedContentCount,
+          y: d.y,
+          height: d.height
+        };
+        if (opts.streamRecords === true) {
+          state.recordSerial += 1;
+          var recordToken = state.sessionId + ':' + state.recordSerial;
+          state.pendingRecords.set(recordToken, html);
+          record.recordToken = recordToken;
+          record.htmlLength = html.length;
+        } else {
+          record.html = html;
+        }
+        records.push(record);
+      }
+      var top = Number(scroller.scrollTop || 0);
+      var clientHeight = Number(scroller.clientHeight || 0);
+      var range = scrollRange(scroller);
+      return {
+        ok: true,
+        sessionId: state.sessionId,
+        refs: refs,
+        records: records,
+        expanded: expanded,
+        requestedTop: requested,
+        scrollTop: top,
+        clientHeight: clientHeight,
+        scrollHeight: Number(scroller.scrollHeight || 0),
+        range: range,
+        atTop: top <= 2,
+        atBottom: range <= 2 || top >= range - 2
+      };
+    })().catch(function (error) {
+      return {
+        ok: false,
+        reason: 'canonical-batch-threw',
+        error: String((error && error.message) || error),
+        records: [],
+        refs: []
+      };
+    });
+  }
+
+  function readCanonicalConversationRecordChunk(options) {
+    var opts = options || {};
+    var state = canonicalCaptureState;
+    if (!state || (opts.sessionId && String(opts.sessionId) !== state.sessionId)) {
+      return { ok: false, reason: 'no-canonical-capture-session', chunk: '' };
+    }
+    var token = String(opts.recordToken || '');
+    var html = state.pendingRecords && state.pendingRecords.get(token);
+    if (typeof html !== 'string') return { ok: false, reason: 'unknown-canonical-record', chunk: '' };
+    var offset = Math.max(0, Math.min(html.length, Number(opts.offset || 0)));
+    var maxChars = Math.max(1024, Math.min(1048576, Number(opts.maxChars || 524288)));
+    var end = Math.min(html.length, offset + maxChars);
+    // Do not split a UTF-16 surrogate pair. The main process writes each chunk
+    // separately as UTF-8, so splitting here would replace the character.
+    if (end < html.length && end > offset) {
+      var last = html.charCodeAt(end - 1);
+      if (last >= 0xD800 && last <= 0xDBFF) end -= 1;
+    }
+    return {
+      ok: true,
+      recordToken: token,
+      offset: offset,
+      nextOffset: end,
+      totalLength: html.length,
+      done: end >= html.length,
+      chunk: html.slice(offset, end)
+    };
+  }
+
+  function releaseCanonicalConversationRecords(options) {
+    var opts = options || {};
+    var state = canonicalCaptureState;
+    if (!state || (opts.sessionId && String(opts.sessionId) !== state.sessionId)) {
+      return { ok: false, reason: 'no-canonical-capture-session', released: 0 };
+    }
+    var tokens = Array.isArray(opts.recordTokens) ? opts.recordTokens : [];
+    var released = 0;
+    for (var i = 0; i < tokens.length; i++) {
+      if (state.pendingRecords.delete(String(tokens[i] || ''))) released++;
+    }
+    return { ok: true, released: released, pendingRecords: state.pendingRecords.size };
+  }
+
+  function endCanonicalConversationCapture(options) {
+    var opts = options || {};
+    var state = canonicalCaptureState;
+    if (!state) return { ok: true, ended: false };
+    if (opts.sessionId && String(opts.sessionId) !== state.sessionId) {
+      return { ok: false, reason: 'wrong-canonical-capture-session' };
+    }
+    if (opts.restoreScrollTop !== false) {
+      try { state.scroller.scrollTop = state.originalScrollTop; } catch (e) {}
+    }
+    try { if (state.pendingRecords) state.pendingRecords.clear(); } catch (e) {}
+    canonicalCaptureState = null;
+    return { ok: true, ended: true };
   }
 
   function negativeRegionFor(el, selectors) {
@@ -3393,6 +3967,7 @@
   }
   function init(config) {
     var c = config || {};
+    ensureExportMutationObserver();
     if (Array.isArray(c.chatRootSelectors) && c.chatRootSelectors.length) {
       CHAT_ROOT_SELECTORS = c.chatRootSelectors.slice();
     }
@@ -5796,6 +6371,396 @@ function waitForPrintableAssets(options) {
   }
 
   // -------------------------------------------------------------------------
+  // Reusable export-job bridge, content-free completeness metrics, and
+  // structural HTML sanitizer.
+  // -------------------------------------------------------------------------
+  function captureExportCompleteness(options) {
+    var opts = options || {};
+    var fallbackSelector = String(opts.fallbackSelector || '');
+    var root = null;
+    try { root = document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]'); } catch (e) {}
+    if (!root) { try { root = getPdfTargetPane(fallbackSelector); } catch (e) {} }
+    if (!root) return { ok: false, logicalTurnCount: 0, messageFingerprints: [] };
+
+    var rows = [];
+    try { rows = getDiagnosticRows(root); } catch (e) {}
+    var fingerprints = [];
+    var emptyAssistantBodyCount = 0;
+    var assistantHints = DOM_COLLECTION_SELECTORS.filter(function (selector) {
+      return /assistant|copilot|answer/i.test(String(selector || ''));
+    });
+    var answerMarker = String(opts.answerMarker || 'Copilot said:');
+    for (var i = 0; i < rows.length; i++) {
+      var text = '';
+      try { text = String(rows[i].textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) {}
+      fingerprints.push(stableExportFingerprint(text));
+      var assistant = false;
+      for (var a = 0; a < assistantHints.length; a++) {
+        try {
+          if (rows[i].matches(assistantHints[a]) || rows[i].querySelector(assistantHints[a])) {
+            assistant = true;
+            break;
+          }
+        } catch (e) {}
+      }
+      if (assistant) {
+        var markerIndex = text.lastIndexOf(answerMarker);
+        var body = markerIndex >= 0 ? text.slice(markerIndex + answerMarker.length).trim() : text;
+        if (body.length < 2) emptyAssistantBodyCount++;
+      }
+    }
+
+    var scroller = null;
+    var bottomCoverageGap = 0;
+    try {
+      scroller = findBestChatScroller(root, null);
+      if (scroller && rows.length) {
+        var sr = scroller.getBoundingClientRect();
+        var lastRect = rows[rows.length - 1].getBoundingClientRect();
+        var lastBottom = Number(scroller.scrollTop || 0) + (lastRect.bottom - sr.top);
+        bottomCoverageGap = Math.max(0, Math.round(Number(scroller.scrollHeight || 0) - lastBottom));
+      }
+    } catch (e) { bottomCoverageGap = 0; }
+
+    var missingImageCount = 0;
+    try {
+      Array.from(root.querySelectorAll('img')).forEach(function (img) {
+        var src = String(img.getAttribute('src') || '').trim();
+        if (!src || (img.complete && Number(img.naturalWidth || 0) === 0)) missingImageCount++;
+      });
+    } catch (e) {}
+
+    return {
+      ok: true,
+      logicalTurnCount: rows.length,
+      firstRowFingerprint: fingerprints[0] || '',
+      lastRowFingerprint: fingerprints.length ? fingerprints[fingerprints.length - 1] : '',
+      messageFingerprints: fingerprints,
+      monotonicRowOrdering: rowsAreOrdered(rows),
+      bottomCoverageGap: bottomCoverageGap,
+      emptyAssistantBodyCount: emptyAssistantBodyCount,
+      missingImageCount: missingImageCount,
+      scrollerRange: scroller ? scrollRange(scroller) : 0
+    };
+  }
+
+  function exportJobSignature() {
+    var metrics = captureExportCompleteness({});
+    return [
+      metrics.logicalTurnCount || 0,
+      metrics.firstRowFingerprint || '',
+      metrics.lastRowFingerprint || ''
+    ].join('|');
+  }
+
+  function getExportJobContext(options) {
+    ensureExportMutationObserver();
+    var opts = options || {};
+    var root = null;
+    try { root = document.querySelector('[' + EXPORT_MARKER_ATTR + '="1"]'); } catch (e) {}
+    if (!root) { try { root = getPdfTargetPane(String(opts.fallbackSelector || '')); } catch (e) {} }
+    var rootStyle = null, bodyStyle = null, htmlStyle = null;
+    try { if (root) rootStyle = getComputedStyle(root); } catch (e) {}
+    try { if (document.body) bodyStyle = getComputedStyle(document.body); } catch (e) {}
+    try { if (document.documentElement) htmlStyle = getComputedStyle(document.documentElement); } catch (e) {}
+    var prefersDark = false;
+    try { prefersDark = !!window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) {}
+    var foreground = String(rootStyle && rootStyle.color || bodyStyle && bodyStyle.color || (prefersDark ? '#f3f4f6' : '#111827'));
+    var background = String(rootStyle && rootStyle.backgroundColor || bodyStyle && bodyStyle.backgroundColor || htmlStyle && htmlStyle.backgroundColor || '');
+    if (!background || background === 'rgba(0, 0, 0, 0)' || background === 'transparent') {
+      background = prefersDark ? '#1f1f1f' : '#ffffff';
+    }
+    var rootIdentity = '';
+    try {
+      rootIdentity = String(
+        root && (root.getAttribute('data-conversation-id') || root.getAttribute('data-chat-id') || root.id) || ''
+      );
+    } catch (e) {}
+    return {
+      ok: true,
+      mutationRevision: exportMutationRevision,
+      conversationIdentity: String(location.href || '') + '|' + rootIdentity,
+      url: String(location.href || ''),
+      title: String(document.title || ''),
+      capturedAt: new Date().toISOString(),
+      theme: {
+        foreground: foreground,
+        background: background,
+        colorScheme: String(rootStyle && rootStyle.colorScheme || htmlStyle && htmlStyle.colorScheme || ''),
+        prefersDark: prefersDark
+      },
+      sourceMetadata: {
+        origin: String(location.origin || ''),
+        rendererAgentVersion: RENDERER_AGENT_VERSION,
+        language: String(document.documentElement && document.documentElement.lang || navigator.language || '')
+      }
+    };
+  }
+
+  function beginExportJob(options) {
+    var opts = options || {};
+    if (exportJobState && exportJobState.active) endExportJob({ jobId: exportJobState.jobId });
+    exportJobState = {
+      active: true,
+      jobId: String(opts.jobId || ''),
+      cancelled: false,
+      startedAt: Date.now(),
+      startSignature: exportJobSignature(),
+      onKeyDown: null
+    };
+    exportJobState.onKeyDown = function (event) {
+      if (event && event.key === 'Escape') cancelExportJob({ jobId: exportJobState && exportJobState.jobId });
+    };
+    try { window.addEventListener('keydown', exportJobState.onKeyDown, true); } catch (e) {}
+    try {
+      showExpandOverlay('Preparing export\u2026\nPress Esc to cancel');
+      var overlay = document.getElementById('app-expand-overlay');
+      if (overlay) overlay.setAttribute('data-app-export-transient', '1');
+    } catch (e) {}
+    return { ok: true, jobId: exportJobState.jobId };
+  }
+
+  function updateExportJobProgress(progress) {
+    var p = progress || {};
+    if (!exportJobState || !exportJobState.active) return { ok: false, reason: 'no-active-job' };
+    if (p.jobId && String(p.jobId) !== exportJobState.jobId) return { ok: false, reason: 'wrong-job' };
+    var seconds = Math.max(0, Math.round(Number(p.elapsedMs || 0) / 1000));
+    var phase = String(p.phase || 'export');
+    var message = String(p.message || phase);
+    try { showExpandOverlay(message + '\n' + phase + ' \u2022 ' + seconds + 's elapsed\nPress Esc to cancel'); } catch (e) {}
+    return { ok: true, cancelled: exportJobState.cancelled === true };
+  }
+
+  function cancelExportJob(options) {
+    var opts = options || {};
+    if (!exportJobState || !exportJobState.active) return { ok: false, reason: 'no-active-job' };
+    if (opts.jobId && String(opts.jobId) !== exportJobState.jobId) return { ok: false, reason: 'wrong-job' };
+    exportJobState.cancelled = true;
+    try { requestExpandCancel(); } catch (e) {}
+    try { showExpandOverlay('Cancelling export\u2026'); } catch (e) {}
+    return { ok: true, cancelled: true };
+  }
+
+  function isExportJobCancelled(options) {
+    var opts = options || {};
+    if (!exportJobState || !exportJobState.active) return { ok: true, active: false, cancelled: false };
+    if (opts.jobId && String(opts.jobId) !== exportJobState.jobId) return { ok: true, active: true, cancelled: false };
+    return { ok: true, active: true, cancelled: exportJobState.cancelled === true };
+  }
+
+  function endExportJob(options) {
+    var opts = options || {};
+    if (!exportJobState) return { ok: true, ended: false };
+    if (opts.jobId && String(opts.jobId) !== exportJobState.jobId) return { ok: false, reason: 'wrong-job' };
+    var state = exportJobState;
+    try {
+      if (canonicalCaptureState) {
+        endCanonicalConversationCapture({
+          sessionId: canonicalCaptureState.sessionId,
+          restoreScrollTop: true
+        });
+      }
+    } catch (e) {}
+    try { if (state.onKeyDown) window.removeEventListener('keydown', state.onKeyDown, true); } catch (e) {}
+    try { hideExpandOverlay(); } catch (e) {}
+    exportJobState = null;
+    try { if (exportJobSignature() !== state.startSignature) exportMutationRevision++; } catch (e) {}
+    return { ok: true, ended: true, cancelled: state.cancelled === true, mutationRevision: exportMutationRevision };
+  }
+
+  function sanitizeExportHtml(html, options) {
+    var opts = options || {};
+    var removeRemoteResources = opts.removeRemoteResources === true;
+    var source = String(html || '');
+    var doc = document.implementation.createHTMLDocument('export');
+    var template = doc.createElement('template');
+    template.innerHTML = source;
+
+    function analyzeDetachedContainer(container) {
+      var rowSelector = safeSelectorList(DOM_COLLECTION_SELECTORS);
+      var candidates = [];
+      try {
+        candidates = Array.from(container.querySelectorAll('[data-export-logical-turn="1"]'));
+      } catch (e) {}
+      if (!candidates.length) {
+        try { candidates = rowSelector ? Array.from(container.querySelectorAll(rowSelector)) : []; } catch (e) {}
+      }
+      var rows = candidates.filter(function (row) {
+        return !candidates.some(function (other) { return other !== row && other.contains(row); });
+      });
+      if (!rows.length) rows = Array.from(container.children || []);
+      var fingerprints = rows.map(function (row) { return stableExportFingerprint(row.textContent || ''); });
+      var monotonic = true, lastIndex = null;
+      var emptyAssistantBodyCount = 0;
+      var assistantHints = DOM_COLLECTION_SELECTORS.filter(function (selector) {
+        return /assistant|copilot|answer/i.test(String(selector || ''));
+      });
+      rows.forEach(function (row) {
+        var raw = row.getAttribute && (row.getAttribute('aria-posinset') || row.getAttribute('data-index') || row.getAttribute('data-item-index'));
+        var index = raw === null || raw === '' ? null : Number(raw);
+        if (index !== null && isFinite(index) && lastIndex !== null && index < lastIndex) monotonic = false;
+        if (index !== null && isFinite(index)) lastIndex = index;
+        var assistant = false;
+        for (var h = 0; h < assistantHints.length; h++) {
+          try {
+            if (row.matches(assistantHints[h]) || row.querySelector(assistantHints[h])) {
+              assistant = true;
+              break;
+            }
+          } catch (e) {}
+        }
+        if (assistant) {
+          var text = String(row.textContent || '').replace(/\s+/g, ' ').trim();
+          var marker = String(opts.answerMarker || 'Copilot said:');
+          var markerIndex = text.lastIndexOf(marker);
+          var body = markerIndex >= 0 ? text.slice(markerIndex + marker.length).trim() : text;
+          if (body.length < 2) emptyAssistantBodyCount++;
+        }
+      });
+      return {
+        rows: rows,
+        fingerprints: fingerprints,
+        monotonic: monotonic,
+        emptyAssistantBodyCount: emptyAssistantBodyCount
+      };
+    }
+    var sourceContainer = doc.createElement('div');
+    sourceContainer.appendChild(template.content.cloneNode(true));
+    var sourceAnalysis = analyzeDetachedContainer(sourceContainer);
+
+    var allowed = new Set([
+      'A','ABBR','ARTICLE','ASIDE','B','BDI','BDO','BLOCKQUOTE','BR','CAPTION','CITE','CODE','COL','COLGROUP',
+      'DD','DEL','DETAILS','DFN','DIV','DL','DT','EM','FIGCAPTION','FIGURE','FOOTER','H1','H2','H3','H4','H5','H6',
+      'HEADER','HR','I','IMG','KBD','LI','MAIN','MARK','OL','P','PICTURE','PRE','Q','S','SAMP','SECTION','SMALL',
+      'SOURCE','SPAN','STRONG','SUB','SUMMARY','SUP','TABLE','TBODY','TD','TFOOT','TH','THEAD','TIME','TR','U','UL','VAR',
+      'SVG','G','PATH','CIRCLE','ELLIPSE','LINE','POLYLINE','POLYGON','RECT','TEXT','TSPAN','DEFS','LINEARGRADIENT',
+      'RADIALGRADIENT','STOP','CLIPPATH','MASK','TITLE','DESC'
+    ]);
+    var dropWithChildren = new Set([
+      'SCRIPT','STYLE','TEMPLATE','NOSCRIPT','IFRAME','OBJECT','EMBED','APPLET','FORM','INPUT','TEXTAREA','SELECT','OPTION','BUTTON','META','LINK','BASE',
+      'FOREIGNOBJECT','ANIMATE','ANIMATETRANSFORM','ANIMATEMOTION','SET','USE','AUDIO','VIDEO','CANVAS'
+    ]);
+    var allowedAttrs = new Set([
+      'alt','aria-label','aria-labelledby','aria-describedby','aria-expanded','aria-hidden','aria-posinset','aria-setsize','class',
+      'colspan','datetime','decoding','dir','height','href','id','lang','loading','open','rel','role','rowspan','scope','src',
+      'srcset','title','width','viewbox','xmlns','d','x','y','x1','x2','y1','y2','cx','cy','r','rx','ry','points','fill',
+      'fill-rule','stroke','stroke-width','stroke-linecap','stroke-linejoin','transform','preserveaspectratio','offset','stop-color',
+      'stop-opacity','clip-path','mask','data-message-id','data-testid','data-index','data-item-index','data-file-name','data-attachment'
+    ]);
+    var removedElements = 0, removedAttributes = 0, dangerousUrls = 0, remoteResourcesRemoved = 0;
+
+    function safeUrl(value, attr, tag) {
+      var raw = String(value || '').trim();
+      if (!raw) return '';
+      if (raw.charAt(0) === '#') return raw;
+      var lowered = raw.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+      if (/^(javascript|vbscript|file|filesystem|blob):/.test(lowered)) { dangerousUrls++; return ''; }
+      if (/^data:/i.test(raw)) {
+        if ((attr === 'src' || attr === 'srcset') && /^data:image\/(?:png|gif|jpeg|jpg|webp|avif|bmp);/i.test(raw)) return raw;
+        dangerousUrls++; return '';
+      }
+      try {
+        var parsed = new URL(raw, String(opts.baseUrl || location.href || 'about:blank'));
+        var scheme = String(parsed.protocol || '').toLowerCase();
+        if (attr === 'href' && (scheme === 'mailto:' || scheme === 'tel:')) return parsed.href;
+        if (scheme !== 'http:' && scheme !== 'https:') { dangerousUrls++; return ''; }
+        if (removeRemoteResources && tag !== 'A') { remoteResourcesRemoved++; return ''; }
+        return parsed.href;
+      } catch (e) { dangerousUrls++; return ''; }
+    }
+
+    function sanitizeElement(el) {
+      var children = Array.from(el.children || []);
+      for (var c = 0; c < children.length; c++) sanitizeElement(children[c]);
+      var tag = String(el.tagName || '').toUpperCase();
+      if (dropWithChildren.has(tag)) {
+        el.remove();
+        removedElements++;
+        return;
+      }
+      if (!allowed.has(tag)) {
+        var parent = el.parentNode;
+        if (parent) while (el.firstChild) parent.insertBefore(el.firstChild, el);
+        el.remove();
+        removedElements++;
+        return;
+      }
+      var attrs = Array.from(el.attributes || []);
+      for (var i = 0; i < attrs.length; i++) {
+        var name = String(attrs[i].name || '').toLowerCase();
+        var attrValue = String(attrs[i].value || '');
+        var keepData = /^data-[a-z0-9_.:-]+$/.test(name);
+        var keepAria = /^aria-[a-z0-9_.:-]+$/.test(name);
+        if (
+          /^on/i.test(name) ||
+          name === 'style' ||
+          ((name !== 'href' && name !== 'src' && name !== 'srcset') && /(?:url\s*\(|expression\s*\(|javascript\s*:)/i.test(attrValue)) ||
+          (!allowedAttrs.has(name) && !keepData && !keepAria)
+        ) {
+          el.removeAttribute(attrs[i].name);
+          removedAttributes++;
+          continue;
+        }
+        if (name === 'href' || name === 'src') {
+          var safe = safeUrl(attrs[i].value, name, tag);
+          if (safe) el.setAttribute(name, safe);
+          else { el.removeAttribute(name); removedAttributes++; }
+        } else if (name === 'srcset') {
+          var entries = String(attrs[i].value || '').split(',').map(function (entry) {
+            var parts = entry.trim().split(/\s+/);
+            var safe = safeUrl(parts.shift() || '', 'srcset', tag);
+            return safe ? [safe].concat(parts).join(' ') : '';
+          }).filter(Boolean);
+          if (entries.length) el.setAttribute(name, entries.join(', '));
+          else { el.removeAttribute(name); removedAttributes++; }
+        } else if (name === 'rel' && tag === 'A') {
+          el.setAttribute('rel', 'noopener noreferrer');
+        }
+      }
+      if (tag === 'A' && el.hasAttribute('href')) el.setAttribute('rel', 'noopener noreferrer');
+    }
+
+    Array.from(template.content.children || []).forEach(sanitizeElement);
+    var container = doc.createElement('div');
+    container.appendChild(template.content.cloneNode(true));
+    var fingerprints = sourceAnalysis.fingerprints;
+    var monotonic = sourceAnalysis.monotonic;
+    var missingImages = 0, remoteImages = 0;
+    Array.from(container.querySelectorAll('img')).forEach(function (img) {
+      var src = String(img.getAttribute('src') || '').trim();
+      if (!src) missingImages++;
+      if (/^https?:/i.test(src)) remoteImages++;
+    });
+    var blocks = new Set(['ARTICLE','ASIDE','BLOCKQUOTE','BR','DD','DIV','DL','DT','FIGCAPTION','FIGURE','FOOTER','H1','H2','H3','H4','H5','H6','HEADER','HR','LI','MAIN','OL','P','PRE','SECTION','TABLE','TR','UL']);
+    var textClone = container.cloneNode(true);
+    Array.from(textClone.querySelectorAll('*')).forEach(function (node) {
+      if (blocks.has(node.tagName)) node.appendChild(doc.createTextNode('\n'));
+    });
+    var plainText = String(textClone.textContent || '').replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    return {
+      ok: true,
+      html: container.innerHTML,
+      plainText: plainText,
+      messageFingerprints: fingerprints,
+      completeness: {
+        logicalTurnCount: sourceAnalysis.rows.length,
+        firstRowFingerprint: fingerprints[0] || '',
+        lastRowFingerprint: fingerprints.length ? fingerprints[fingerprints.length - 1] : '',
+        monotonicRowOrdering: monotonic,
+        emptyAssistantBodyCount: sourceAnalysis.emptyAssistantBodyCount,
+        missingImageCount: missingImages,
+        remoteImageCount: remoteImages
+      },
+      report: {
+        removedElements: removedElements,
+        removedAttributes: removedAttributes,
+        dangerousUrls: dangerousUrls,
+        remoteResourcesRemoved: remoteResourcesRemoved
+      }
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // Cheap live scroller measurement.
   //
   // Returns the current scroll RANGE of the same virtualized scroller that
@@ -5848,6 +6813,11 @@ function waitForPrintableAssets(options) {
       expandForPrint: expandForPrint,
       hydrateVirtualizer: hydrateVirtualizer,
       collectVirtualizedChatHtml: collectVirtualizedChatHtml,
+      beginCanonicalConversationCapture: beginCanonicalConversationCapture,
+      captureCanonicalConversationBatch: captureCanonicalConversationBatch,
+      readCanonicalConversationRecordChunk: readCanonicalConversationRecordChunk,
+      releaseCanonicalConversationRecords: releaseCanonicalConversationRecords,
+      endCanonicalConversationCapture: endCanonicalConversationCapture,
       extractScopedImages: extractScopedImages,
       inlineImageDataUris: inlineImageDataUris,
       pdfPrepare: pdfPrepare,
@@ -5881,6 +6851,14 @@ function waitForPrintableAssets(options) {
       requestExpandCancel: requestExpandCancel,
       showExpandOverlay: showExpandOverlay,
       hideExpandOverlay: hideExpandOverlay,
+      beginExportJob: beginExportJob,
+      updateExportJobProgress: updateExportJobProgress,
+      cancelExportJob: cancelExportJob,
+      isExportJobCancelled: isExportJobCancelled,
+      endExportJob: endExportJob,
+      getExportJobContext: getExportJobContext,
+      captureExportCompleteness: captureExportCompleteness,
+      sanitizeExportHtml: sanitizeExportHtml,
       measureChatScroller: measureChatScroller,
       findCapability: findCapability,
       getDomAdapterHealth: getDomAdapterHealth
