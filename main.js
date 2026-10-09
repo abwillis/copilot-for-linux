@@ -5,7 +5,7 @@ const { app, BrowserWindow, Menu, MenuItem, Tray, nativeImage, nativeTheme, shel
 const path = require('path');
 const fs = require('fs');
 
-const appConfig = require('./app.config');
+const appConfig = require('./app-specific/app.config');
 const { createIPC } = require('./lib/ipc');
 const { createRuntimeConfig } = require('./lib/runtime-config');
 
@@ -44,7 +44,7 @@ const {
   DOM_COLLECTION_EXCLUDE_SELECTORS,
   CHAT_INPUT_SELECTORS,
   REASONING_EXPAND_SELECTORS,
-} = require('./lib/chat-dom');
+} = require('./app-specific/chat-dom');
 
 const {
   SELECTORS, IGNORE_SELECTORS, IGNORE_JOINED,
@@ -54,7 +54,7 @@ const {
   injectCSSOnLoad, injectCSSIntoAllFrames, applyMaxLayoutCSS, requestExpandedLayout,
   buildFindContentVisibilityCSS,
   createLayoutCSS,
-} = require('./lib/layout-css');
+} = require('./app-specific/layout-css');
 
 // ============================================================================
 // Renderer-side agent installer
@@ -125,7 +125,7 @@ function getRendererAgentBoot() {
     // Boot prelude: expose the renderer-agent config to the injected agent
     // BEFORE agent source executes.  Without this, the agent installs at
     // window.__appRenderer (its default) instead of the configured global
-    // (e.g. window.__copilotRenderer), and every callRendererMethod(...)
+    // named by appConfig.rendererApiGlobal, and every callRendererMethod(...)
     // returns { ok:false, missing:true, method:... }.
     const bootConfigPrelude =
       'try { window.__APP_RENDERER_AGENT_CONFIG__ = ' + JSON.stringify({

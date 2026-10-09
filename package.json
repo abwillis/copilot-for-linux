@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "3.00.08",
+  "version": "3.00.09",
   "description": "Copilot for Linux",
   "desktopName": "copilot-for-linux",
   "main": "main.js",
@@ -20,13 +20,13 @@
     "files": [
       "main.js",
       "main.bootstrap.js",
-      "app.config.js",
-      "preload.js",
       "preload-core.js",
+      "app-specific/**",
       "renderer/**",
       "package.json",
       "assets/**",
-      "lib/**"
+      "lib/**",
+      "test/**"
     ],
     "asarUnpack": [
       "**/*.node",

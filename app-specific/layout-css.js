@@ -37,7 +37,7 @@
 
 const {
     callRendererMethodInAllFrames,
-} = require('./renderer-api');
+} = require('../lib/renderer-api');
 
 const {
     CHAT_SCOPE_PSEUDO,
