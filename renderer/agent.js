@@ -6568,13 +6568,57 @@ function waitForPrintableAssets(options) {
     return { ok: true, ended: true, cancelled: state.cancelled === true, mutationRevision: exportMutationRevision };
   }
 
+  function setExportTemplateHtml(template, value) {
+    var source = String(value || '');
+
+    /*
+     * Element.setHTML() is not a raw HTML parser: it always runs the browser's
+     * Sanitizer. The default Sanitizer drops custom elements, including their
+     * descendants. Gemini stores both sides of a conversation below custom
+     * element hosts such as <user-query>, <model-response>, and
+     * <message-content>, so the default call can erase every captured word
+     * before sanitizeElement() below gets a chance to apply the export policy.
+     *
+     * Keep setHTML() for Trusted Types compatibility, but explicitly permit
+     * custom-element hosts. This native pass still removes XSS-unsafe markup;
+     * sanitizeElement() remains the authoritative, cross-app export sanitizer
+     * and unwraps non-allowlisted hosts while retaining their safe children.
+     */
+    if (template && typeof template.setHTML === 'function' && typeof Sanitizer === 'function') {
+      try {
+        template.setHTML(source, {
+          sanitizer: new Sanitizer({ allowCustomElements: true })
+        });
+        return { ok: true, parser: 'setHTML-custom-elements' };
+      } catch (e) {}
+    }
+
+    /*
+     * Older Chromium releases do not expose the Sanitizer API. Preserve the
+     * pre-Trusted-Types behavior there. If a host enforces Trusted Types but
+     * lacks the compatible setHTML() path, fail explicitly instead of falling
+     * back to default setHTML() and silently exporting an empty conversation.
+     */
+    try {
+      template.innerHTML = source;
+      return { ok: true, parser: 'innerHTML' };
+    } catch (e) {
+      return {
+        ok: false,
+        error: 'Unable to parse export HTML without discarding custom elements: ' +
+          String((e && e.message) || e)
+      };
+    }
+  }
+
   function sanitizeExportHtml(html, options) {
     var opts = options || {};
     var removeRemoteResources = opts.removeRemoteResources === true;
     var source = String(html || '');
     var doc = document.implementation.createHTMLDocument('export');
     var template = doc.createElement('template');
-    template.innerHTML = source;
+    var parsed = setExportTemplateHtml(template, source);
+    if (!parsed.ok) return parsed;
 
     function analyzeDetachedContainer(container) {
       var rowSelector = safeSelectorList(DOM_COLLECTION_SELECTORS);
