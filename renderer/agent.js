@@ -2161,9 +2161,108 @@
     return s;
   }
 
+  var chatScrollerCacheByDocument = typeof WeakMap === 'function' ? new WeakMap() : null;
+  var chatScrollerDiscoveryHealth = {
+    cacheHits: 0,
+    cacheMisses: 0,
+    qualifiedCandidateHits: 0,
+    genericScanCount: 0
+  };
+
+  function getChatScrollerDocumentState() {
+    if (!chatScrollerCacheByDocument) return null;
+    var state = chatScrollerCacheByDocument.get(document);
+    if (state) return state;
+    state = { generation: 0, root: null, scroller: null, selectedGeneration: -1, observer: null };
+    try {
+      state.observer = new MutationObserver(function () {
+        state.generation += 1;
+      });
+      state.observer.observe(document.documentElement || document, {
+        childList: true,
+        subtree: true
+      });
+    } catch (e) {}
+    chatScrollerCacheByDocument.set(document, state);
+    return state;
+  }
+
+  function chatScrollerConfidence(root, el) {
+    if (!root || !el) return 0;
+    var confidence = 0;
+    try {
+      if (matchesAnyVirtualizerSelector(el)) confidence += 45;
+      if (el.contains && el.contains(root)) confidence += 30;
+      else if (root.contains && root.contains(el)) confidence += 20;
+      if (isScrollableStyle(el)) confidence += 15;
+      if (scrollRange(el) > 80) confidence += 10;
+      if (visibleBox(el) || el === document.scrollingElement) confidence += 5;
+    } catch (e) {}
+    return Math.min(100, confidence);
+  }
+
+  function probeBestScrollCandidate(root, candidates, minimumConfidence) {
+    if (!candidates.length) return null;
+    candidates.sort(function (a, b) {
+      return scoreScrollCandidate(root, b) - scoreScrollCandidate(root, a);
+    });
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      try {
+        if (chatScrollerConfidence(root, el) < minimumConfidence) continue;
+        var range = scrollRange(el);
+        if (range <= 8) continue;
+        var before = el.scrollTop;
+        var probe = Math.min(range, Math.max(20, before + Math.min(250, range)));
+        el.scrollTop = probe;
+        var moved = Math.abs(Number(el.scrollTop || 0) - Number(before || 0)) > 1;
+        el.scrollTop = before;
+        if (moved || range > 1000) return el;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function cacheChatScroller(state, root, scroller) {
+    if (!state || !scroller) return scroller;
+    state.root = root;
+    state.scroller = scroller;
+    state.selectedGeneration = state.generation;
+    return scroller;
+  }
+
   function findBestChatScroller(root, diag) {
+    if (!root) return null;
+    var state = getChatScrollerDocumentState();
+    if (
+      state &&
+      state.root === root &&
+      state.scroller &&
+      state.scroller.isConnected &&
+      root.isConnected
+    ) {
+      chatScrollerDiscoveryHealth.cacheHits += 1;
+      state.selectedGeneration = state.generation;
+      if (diag) {
+        diag.push({
+          reason: 'scroller-cache-hit',
+          label: elementLabel(state.scroller),
+          range: scrollRange(state.scroller),
+          mutationGeneration: state.generation
+        });
+      }
+      return state.scroller;
+    }
+    chatScrollerDiscoveryHealth.cacheMisses += 1;
+    if (state) {
+      state.root = null;
+      state.scroller = null;
+      state.selectedGeneration = -1;
+    }
+
     var candidates = [];
     var n = root;
+    var requiredConfidence = capabilityThreshold('interact');
 
     // 1. The document scroller can be the real scroll owner in SPA shells.
     try {
@@ -2198,7 +2297,23 @@
       } catch (e) {}
     }
 
-    // 5. Generic visible scroll scan.
+    // Configured and structural evidence is the normal success path. Do not
+    // walk every element in the document once a qualified candidate exists.
+    var qualified = probeBestScrollCandidate(root, candidates, requiredConfidence);
+    if (qualified) {
+      chatScrollerDiscoveryHealth.qualifiedCandidateHits += 1;
+      return cacheChatScroller(state, root, qualified);
+    }
+
+    // 5. Exceptional final fallback: scan all visible elements only when the
+    // configured/structural candidates fail the interaction confidence gate.
+    chatScrollerDiscoveryHealth.genericScanCount += 1;
+    if (diag) {
+      diag.push({
+        reason: 'generic-scroll-scan-required',
+        mutationGeneration: state ? state.generation : 0
+      });
+    }
     try {
       Array.from(document.querySelectorAll('body *')).forEach(function (el) {
         if (scrollRange(el) > 80) {
@@ -2208,27 +2323,14 @@
     } catch (e) {}
 
     if (!candidates.length) return null;
-
-    candidates.sort(function (a, b) {
-      return scoreScrollCandidate(root, b) - scoreScrollCandidate(root, a);
-    });
-
-    // Probe the highest scoring candidates to make sure scrollTop can move.
-    for (var i = 0; i < candidates.length; i++) {
-      var el = candidates[i];
-      try {
-        var range = scrollRange(el);
-        if (range <= 8) continue;
-        var before = el.scrollTop;
-        var probe = Math.min(range, Math.max(20, before + Math.min(250, range)));
-        el.scrollTop = probe;
-        var moved = Math.abs(Number(el.scrollTop || 0) - Number(before || 0)) > 1;
-        el.scrollTop = before;
-        if (moved || range > 1000) return el;
-      } catch (e) {}
+    var fallback = probeBestScrollCandidate(root, candidates, 0);
+    if (!fallback) {
+      candidates.sort(function (a, b) {
+        return scoreScrollCandidate(root, b) - scoreScrollCandidate(root, a);
+      });
+      fallback = candidates[0] || null;
     }
-
-    return candidates[0];
+    return cacheChatScroller(state, root, fallback);
   }
 
   function findCollapsedVirtualizerInsideRoot(root) {
@@ -3956,6 +4058,13 @@
     var scroller = root.element ? findBestChatScroller(root.element, null) : null;
     result.messageRowCount = rows.length;
     result.exportThresholds = (DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.thresholds) || {};
+    result.scrollerDiscovery = {
+      cacheHits: Number(chatScrollerDiscoveryHealth.cacheHits || 0),
+      cacheMisses: Number(chatScrollerDiscoveryHealth.cacheMisses || 0),
+      qualifiedCandidateHits: Number(chatScrollerDiscoveryHealth.qualifiedCandidateHits || 0),
+      genericScanCount: Number(chatScrollerDiscoveryHealth.genericScanCount || 0),
+      cachedMutationGeneration: Number((getChatScrollerDocumentState() || {}).selectedGeneration || 0)
+    };
     result.exportCompleteness = {
       readReady: Number(root.confidence || 0) >= capabilityThreshold('read'),
       destructiveReady: Number(root.confidence || 0) >= capabilityThreshold('destructive'),
