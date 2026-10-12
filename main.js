@@ -27,6 +27,7 @@ const { createSettingsWindow } = require('./lib/settings-window');
 const { createGlobalShortcutManager } = require('./lib/global-shortcuts');
 const { createPermissionManager } = require('./lib/permissions');
 const { createStartupManager } = require('./lib/startup');
+const { formatScrollerDiscoveryLines } = require('./lib/selector-health');
 
 // === App-specific modules ===
 const {
@@ -385,6 +386,7 @@ async function showSelectorHealth() {
     'Scroll owner: ' + (completeness.scrollerFound
       ? 'found (range ' + Number(completeness.scrollerRange || 0) + ')'
       : 'not found'),
+    ...formatScrollerDiscoveryLines(best?.scrollerDiscovery),
     'Completeness warnings: ' + ((completeness.warnings || []).join(', ') || 'none'),
     'Contract version: ' + Number(best?.contractVersion || 0),
     'Agent version: ' + RENDERER_AGENT_VERSION,
