@@ -64,7 +64,8 @@ const CONTENT_PAD_LEFT = '1ch';
 
 // How many wrapper levels between a conversation container and a message we are
 // willing to un-clamp with :has(). 6 covers every Copilot layout observed so
-// far (scroller > virtualizer > row > card > article). Raise only if a future
+// far (scroller > virtualizer > row > card > article). However, practically speaking,
+// 3 is sufficient and has some UI speed advantages (less now). Raise only if a future
 // UI nests deeper; each level adds one selector, not one DOM walk per node.
 const WRAPPER_DEPTH = 3;
 
