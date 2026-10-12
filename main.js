@@ -28,7 +28,7 @@ const { createGlobalShortcutManager } = require('./lib/global-shortcuts');
 const { createPermissionManager } = require('./lib/permissions');
 const { createStartupManager } = require('./lib/startup');
 const { createRendererAgentInstaller } = require('./lib/renderer-agent-installer');
-const { formatScrollerDiscoveryLines } = require('./lib/selector-health');
+const { buildSelectorHealthReport } = require('./lib/selector-health');
 
 // === App-specific modules ===
 const {
@@ -325,42 +325,64 @@ async function showSelectorHealth() {
     win, 'getDomAdapterHealth',
     { __rendererApiOptions: { rendererApiGlobal: RENDERER_API_GLOBAL } }
   );
-  const best = results.map(r => r && r.value).filter(v => v && v.ok)
+  const responding = results.filter(result => result?.value?.ok);
+  const bestResult = responding
     .sort((a, b) => {
-      const confidence = Number(b.selectedRootConfidence || 0) - Number(a.selectedRootConfidence || 0);
+      const confidence = Number(b.value?.selectedRootConfidence || 0) - Number(a.value?.selectedRootConfidence || 0);
       if (confidence) return confidence;
-      return Number(b.selectedRootTextLength || 0) - Number(a.selectedRootTextLength || 0);
+      return Number(b.value?.selectedRootTextLength || 0) - Number(a.value?.selectedRootTextLength || 0);
     })[0];
-  const caps = best?.capabilities || {};
-  const completeness = best?.exportCompleteness || {};
-  const thresholds = best?.exportThresholds || {};
-  const lines = [
-    'Selected root: ' + (best?.selectedRoot || 'not found'),
-    'Root confidence: ' + Number(best?.selectedRootConfidence || 0) +
-      ' (read ' + Number(thresholds.read || 0) +
-      ', destructive ' + Number(thresholds.destructive || 0) + ')',
-    'Root evidence: ' + ((caps.chatRoot?.evidence || []).join(', ') || 'none'),
-    'Root warnings: ' + ((caps.chatRoot?.warnings || []).join(', ') || 'none'),
-    'Message rows: ' + Number(best?.messageRowCount || 0),
-    'Composer: ' + (caps.composer?.found ? 'found (' + caps.composer.confidence + ')' : 'not found'),
-    'Virtualizer: ' + (caps.virtualizer?.found ? 'found (' + caps.virtualizer.confidence + ')' : 'not found'),
-    'Disclosure: ' + (caps.disclosureControl?.found ? 'found (' + caps.disclosureControl.confidence + ')' : 'not found'),
-    'Fallback tier: ' + (best?.activeFallbackTier || 'unknown'),
-    'Export checks: ' + (completeness.destructiveReady ? 'ready' : 'blocked (low confidence)'),
-    'Row order: ' + (completeness.orderedRows ? 'verified' : 'not verified'),
-    'Stable row identifiers: ' + Number(completeness.stableRowIdentifiers || 0) +
-      '/' + Number(best?.messageRowCount || 0) +
-      ' (' + Number(completeness.stableRowIdentifierCoveragePct || 0) + '%)',
-    'Scroll owner: ' + (completeness.scrollerFound
-      ? 'found (range ' + Number(completeness.scrollerRange || 0) + ')'
-      : 'not found'),
-    ...formatScrollerDiscoveryLines(best?.scrollerDiscovery),
-    'Completeness warnings: ' + ((completeness.warnings || []).join(', ') || 'none'),
-    'Contract version: ' + Number(best?.contractVersion || 0),
-    'Agent version: ' + RENDERER_AGENT_VERSION,
-    'App version: ' + (app.getVersion?.() || 'unknown')
-  ];
-  await dialog.showMessageBox(win, { type: 'info', title: 'Selector Health', message: 'Local DOM adapter health', detail: lines.join('\n'), buttons: ['OK'], noLink: true });
+  const best = bestResult?.value || {
+    ok: false,
+    capabilities: {},
+    scrollerDiscovery: {},
+    exportCompleteness: {},
+  };
+  const frames = win.webContents.mainFrame?.framesInSubtree ?? win.webContents.mainFrame?.frames ?? [];
+  const frameIds = new Set([0]);
+  for (const frame of frames) {
+    if (frame === win.webContents.mainFrame) continue;
+    frameIds.add(Number(frame?.routingId ?? -1));
+  }
+  let notice = 'Local DOM adapter health';
+  while (true) {
+    const report = buildSelectorHealthReport({
+      appLabel: APP_LABEL,
+      appVersion: app.getVersion?.() || 'unknown',
+      rendererAgentVersion: best.adapterVersion || RENDERER_AGENT_VERSION,
+      urlOrigin: best.urlOrigin,
+      frameCount: frameIds.size,
+      respondingFrameCount: responding.length,
+      selectedFrame: bestResult?.where || 'none',
+      diagnosticSession: getDiagnosticSessionStatus(),
+      health: best,
+    });
+    const result = await dialog.showMessageBox(win, {
+      type: 'info',
+      title: 'Selector Health',
+      message: notice,
+      detail: report,
+      buttons: ['Copy diagnostic report', 'Start temporary diagnostic session', 'Close'],
+      defaultId: 2,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (result.response === 0) {
+      clipboard.writeText(report);
+      notice = 'Diagnostic report copied to the clipboard.';
+      continue;
+    }
+    if (result.response === 1) {
+      const durationMinutes = Math.max(1, Number(APP_CONFIG.diagnosticSessionDurationMinutes) || 15);
+      const status = startDiagnosticSession(durationMinutes);
+      try { refreshTrayMenu(); } catch {}
+      notice = status?.active
+        ? `Temporary diagnostic session started for ${durationMinutes} minute(s).`
+        : 'Temporary diagnostic session could not be started.';
+      continue;
+    }
+    break;
+  }
 }
 
 // ---------- Find-in-page module bridge ----------

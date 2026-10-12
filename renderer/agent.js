@@ -2152,7 +2152,16 @@
     if (!chatScrollerCacheByDocument) return null;
     var state = chatScrollerCacheByDocument.get(document);
     if (state) return state;
-    state = { generation: 0, root: null, scroller: null, selectedGeneration: -1, observer: null };
+    state = {
+      generation: 0,
+      root: null,
+      scroller: null,
+      selectedGeneration: -1,
+      observer: null,
+      lastLookup: 'none',
+      selectionSource: 'none',
+      fullDocumentFallbackNeeded: false
+    };
     try {
       state.observer = new MutationObserver(function () {
         state.generation += 1;
@@ -2202,11 +2211,13 @@
     return null;
   }
 
-  function cacheChatScroller(state, root, scroller) {
+  function cacheChatScroller(state, root, scroller, selectionSource) {
     if (!state || !scroller) return scroller;
     state.root = root;
     state.scroller = scroller;
     state.selectedGeneration = state.generation;
+    state.selectionSource = selectionSource || 'qualified-rescan';
+    state.fullDocumentFallbackNeeded = state.selectionSource === 'full-document-rescan';
     return scroller;
   }
 
@@ -2221,6 +2232,7 @@
       root.isConnected
     ) {
       chatScrollerDiscoveryHealth.cacheHits += 1;
+      state.lastLookup = 'cached';
       state.selectedGeneration = state.generation;
       if (diag) {
         diag.push({
@@ -2234,9 +2246,12 @@
     }
     chatScrollerDiscoveryHealth.cacheMisses += 1;
     if (state) {
+      state.lastLookup = 'rescanned';
       state.root = null;
       state.scroller = null;
       state.selectedGeneration = -1;
+      state.selectionSource = 'none';
+      state.fullDocumentFallbackNeeded = false;
     }
 
     var candidates = [];
@@ -2281,12 +2296,16 @@
     var qualified = probeBestScrollCandidate(root, candidates, requiredConfidence);
     if (qualified) {
       chatScrollerDiscoveryHealth.qualifiedCandidateHits += 1;
-      return cacheChatScroller(state, root, qualified);
+      return cacheChatScroller(state, root, qualified, 'qualified-rescan');
     }
 
     // 5. Exceptional final fallback: scan all visible elements only when the
     // configured/structural candidates fail the interaction confidence gate.
     chatScrollerDiscoveryHealth.genericScanCount += 1;
+    if (state) {
+      state.selectionSource = 'full-document-rescan';
+      state.fullDocumentFallbackNeeded = true;
+    }
     if (diag) {
       diag.push({
         reason: 'generic-scroll-scan-required',
@@ -2309,7 +2328,7 @@
       });
       fallback = candidates[0] || null;
     }
-    return cacheChatScroller(state, root, fallback);
+    return cacheChatScroller(state, root, fallback, 'full-document-rescan');
   }
 
   function findCollapsedVirtualizerInsideRoot(root) {
@@ -4011,22 +4030,40 @@
     }
     return count;
   }
+  function diagnosticCapabilityLevel(name) {
+    if (name === 'composer' || name === 'disclosureControl' || name === 'virtualizer') return 'interact';
+    return 'read';
+  }
+  function diagnosticCapabilityStatus(hit, threshold) {
+    if (!hit || !hit.ok || !hit.element) return 'Missing';
+    if (Number(hit.confidence || 0) < Number(threshold || 0)) return 'Low confidence';
+    return (hit.evidence || []).indexOf('configured selector evidence') >= 0
+      ? 'Healthy'
+      : 'Fallback';
+  }
   function getDomAdapterHealth() {
     var names = ['chatRoot','messageRow','composer','disclosureControl','virtualizer'];
     var result = { ok: true, adapterVersion: RENDERER_AGENT_VERSION, contractVersion: Number(DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.version || 0), capabilities: {}, activeFallbackTier: 'none' };
+    try { result.urlOrigin = String(window.location && window.location.origin || ''); } catch (e) { result.urlOrigin = ''; }
     var root = findCapability('chatRoot');
     names.forEach(function (name) {
       var hit = name === 'chatRoot' ? root : findCapability(name, {
         root: root.element || null,
         verifyBehavior: name === 'composer'
       });
+      var requiredLevel = diagnosticCapabilityLevel(name);
+      var confidenceThreshold = capabilityThreshold(requiredLevel);
       result.capabilities[name] = {
         found: !!hit.ok && Number(hit.confidence || 0) >= capabilityThreshold('read'),
         confidence: Number(hit.confidence || 0),
+        confidenceThreshold: confidenceThreshold,
+        requiredLevel: requiredLevel,
+        status: diagnosticCapabilityStatus(hit, confidenceThreshold),
         evidence: hit.evidence || [],
         warnings: hit.warnings || [],
         label: hit.element ? elementLabel(hit.element) : null,
-        tier: hit.tier || 'none'
+        tier: hit.tier || 'none',
+        selectedTier: hit.tier || 'none'
       };
     });
     result.rootIdentity = rootIdentityForHit(root);
@@ -4041,12 +4078,17 @@
     var scroller = root.element ? findBestChatScroller(root.element, null) : null;
     result.messageRowCount = rows.length;
     result.exportThresholds = (DOM_ADAPTER_CONTRACT && DOM_ADAPTER_CONTRACT.thresholds) || {};
+    var scrollerState = getChatScrollerDocumentState() || {};
     result.scrollerDiscovery = {
       cacheHits: Number(chatScrollerDiscoveryHealth.cacheHits || 0),
       cacheMisses: Number(chatScrollerDiscoveryHealth.cacheMisses || 0),
       qualifiedCandidateHits: Number(chatScrollerDiscoveryHealth.qualifiedCandidateHits || 0),
       genericScanCount: Number(chatScrollerDiscoveryHealth.genericScanCount || 0),
-      cachedMutationGeneration: Number((getChatScrollerDocumentState() || {}).selectedGeneration || 0)
+      cachedMutationGeneration: Number(scrollerState.selectedGeneration || 0),
+      documentMutationGeneration: Number(scrollerState.generation || 0),
+      cacheState: scrollerState.lastLookup || 'unavailable',
+      selectionSource: scrollerState.selectionSource || 'none',
+      fullDocumentFallbackNeeded: scrollerState.fullDocumentFallbackNeeded === true
     };
     result.exportCompleteness = {
       readReady: Number(root.confidence || 0) >= capabilityThreshold('read'),

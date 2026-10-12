@@ -111,6 +111,9 @@ test('qualified scroller candidates bypass the generic document scan and remain 
   let health = api.getDomAdapterHealth();
   assert.equal(health.scrollerDiscovery.genericScanCount, 0);
   assert.ok(health.scrollerDiscovery.qualifiedCandidateHits >= 1);
+  assert.equal(health.scrollerDiscovery.fullDocumentFallbackNeeded, false);
+  assert.equal(health.scrollerDiscovery.selectionSource, 'qualified-rescan');
+  assert.equal(health.scrollerDiscovery.cacheState, 'cached');
 
   document.body.appendChild(harness.createElement({
     tag: 'span',
@@ -220,4 +223,7 @@ test('generic document scan remains an observable final fallback', t => {
 
   const health = api.getDomAdapterHealth();
   assert.equal(health.scrollerDiscovery.genericScanCount, 1);
+  assert.equal(health.scrollerDiscovery.fullDocumentFallbackNeeded, true);
+  assert.equal(health.scrollerDiscovery.selectionSource, 'full-document-rescan');
+  assert.equal(health.scrollerDiscovery.cacheState, 'cached');
 });

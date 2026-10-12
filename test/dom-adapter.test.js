@@ -239,6 +239,11 @@ test('low-confidence root candidates are rejected before read or export operatio
   assert.equal(exportAttempt.operationLevel, 'destructive');
   assert.equal(exportAttempt.requiredConfidence, SHARED_CONTRACT.thresholds.destructive);
   assert.equal(document.querySelector('[data-pdf-export-target="1"]'), null);
+
+  const health = api.getDomAdapterHealth();
+  assert.equal(health.capabilities.chatRoot.status, 'Low confidence');
+  assert.equal(health.capabilities.chatRoot.confidenceThreshold, SHARED_CONTRACT.thresholds.read);
+  assert.equal(health.capabilities.chatRoot.requiredLevel, 'read');
 });
 
 test('navigation, dialogs, menus, and toolbars suppress composer candidates', async t => {
@@ -280,6 +285,10 @@ test('semantic-only chat root and composer fallbacks survive app fingerprint los
   assert.ok(root.confidence >= semanticContract.thresholds.read);
   assert.equal(root.tier, 'semantic-structural');
   assert.doesNotMatch(root.evidence.join('\n'), /configured selector evidence/);
+
+  const health = api.getDomAdapterHealth();
+  assert.equal(health.capabilities.chatRoot.status, 'Fallback');
+  assert.equal(health.capabilities.chatRoot.selectedTier, 'semantic-structural');
 
   const composer = api.findCapability('composer', { root: root.element, verifyBehavior: true });
   assert.equal(composer.ok, true);
@@ -343,4 +352,6 @@ test('selector health remains structured when no root or composer is found', t =
   assert.equal(health.messageRowCount, 0);
   assert.equal(health.exportCompleteness.readReady, false);
   assert.equal(health.exportCompleteness.destructiveReady, false);
+  assert.equal(health.capabilities.chatRoot.status, 'Missing');
+  assert.equal(health.capabilities.composer.status, 'Missing');
 });

@@ -154,7 +154,7 @@ module.exports = Object.freeze({
   partitionEnvVar: 'COPILOT_PARTITION',
   layoutObserverGlobal: '__copilot_layoutObserver',
   rendererApiGlobal: '__copilotRenderer',
-  rendererAgentVersion: 6,
+  rendererAgentVersion: 7,
 
   dynamicWidth: Object.freeze({
     cssVar: '--copilot-vw',
