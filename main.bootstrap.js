@@ -26,6 +26,14 @@ function createMainBootstrap(deps = {}) {
   let loggingShutdownComplete = false;
 
   function bootstrapApp() {
+    if (process.argv.includes('--packaged-smoke')) {
+      const { ipcMain } = require('electron');
+      const { runPackagedSmoke } = require('./test/electron/packaged-smoke');
+      return runPackagedSmoke({ app, BrowserWindow, ipcMain }).catch(error => {
+        console.error('Packaged smoke failed:', error);
+        app.exit(1);
+      });
+    }
     app.setName(appConfig.appName);
     app.setAppUserModelId(appConfig.appUserModelId);
 

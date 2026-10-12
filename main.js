@@ -27,6 +27,7 @@ const { createSettingsWindow } = require('./lib/settings-window');
 const { createGlobalShortcutManager } = require('./lib/global-shortcuts');
 const { createPermissionManager } = require('./lib/permissions');
 const { createStartupManager } = require('./lib/startup');
+const { createRendererAgentInstaller } = require('./lib/renderer-agent-installer');
 const { formatScrollerDiscoveryLines } = require('./lib/selector-health');
 
 // === App-specific modules ===
@@ -94,12 +95,15 @@ const {
     getRuntimeConfig: () => APP_CONFIG,
 });
 
-let __cachedRendererAgentBoot = null;
-function getRendererAgentBoot() {
-  if (__cachedRendererAgentBoot !== null) return __cachedRendererAgentBoot;
-  try {
-    const src = fs.readFileSync(RENDERER_AGENT_PATH, 'utf8');
-    const cfg = JSON.stringify({
+let rendererAgentInstaller = null;
+function initRendererAgentInstaller() {
+  if (rendererAgentInstaller) return rendererAgentInstaller;
+  rendererAgentInstaller = createRendererAgentInstaller({
+    fs,
+    agentPath: RENDERER_AGENT_PATH,
+    rendererApiGlobal: RENDERER_API_GLOBAL,
+    rendererAgentVersion: RENDERER_AGENT_VERSION,
+    agentConfig: {
       chatRootSelectors: CHAT_ROOT_SELECTORS,
       junkSelectors: DOM_CLEANUP_SELECTORS,
       cleanupPolicy: DOM_CLEANUP_POLICY,
@@ -112,59 +116,21 @@ function getRendererAgentBoot() {
       collectionExcludeSelectors: DOM_COLLECTION_EXCLUDE_SELECTORS,
       chatInputSelectors: CHAT_INPUT_SELECTORS,
       reasoningExpandSelectors: REASONING_EXPAND_SELECTORS,
-      dynamicWidthCssVar:    APP_DYNAMIC_WIDTH?.cssVar    || '',
-      dynamicWidthMinVw:     APP_DYNAMIC_WIDTH?.minVw     ?? 0,
-      dynamicWidthMaxVw:     APP_DYNAMIC_WIDTH?.maxVw     ?? 100,
+      dynamicWidthCssVar: APP_DYNAMIC_WIDTH?.cssVar || '',
+      dynamicWidthMinVw: APP_DYNAMIC_WIDTH?.minVw ?? 0,
+      dynamicWidthMaxVw: APP_DYNAMIC_WIDTH?.maxVw ?? 100,
       dynamicWidthDefaultVw: Number(APP_CONFIG?.layoutWidthVw ?? APP_DYNAMIC_WIDTH?.defaultVw ?? 100),
-      rendererApiGlobal: RENDERER_API_GLOBAL,
-      rendererAgentVersion: RENDERER_AGENT_VERSION,
-    });
-    const globalJson = JSON.stringify(RENDERER_API_GLOBAL);
+    },
+  });
+  return rendererAgentInstaller;
+}
 
-    // Boot prelude: expose the renderer-agent config to the injected agent
-    // BEFORE agent source executes.  Without this, the agent installs at
-    // window.__appRenderer (its default) instead of the configured global
-    // named by appConfig.rendererApiGlobal, and every callRendererMethod(...)
-    // returns { ok:false, missing:true, method:... }.
-    const bootConfigPrelude =
-      'try { window.__APP_RENDERER_AGENT_CONFIG__ = ' + JSON.stringify({
-        rendererApiGlobal: RENDERER_API_GLOBAL,
-        rendererAgentVersion: RENDERER_AGENT_VERSION,
-      }) + '; } catch (e) {}\n';
-    __cachedRendererAgentBoot =
-      bootConfigPrelude +
-      src +
-      '\n;try {' +
-        'var __rendererApiGlobal = ' + globalJson + ';' +
-        'var __rendererApi = window[__rendererApiGlobal];' +
-        'if (__rendererApi && typeof __rendererApi.init === "function") { __rendererApi.init(' + cfg + '); }' +
-      '} catch (e) {}';
-  } catch (err) {
-    console.error('[renderer-agent] failed to load renderer/agent.js:', err);
-    __cachedRendererAgentBoot = '';
-  }
-  return __cachedRendererAgentBoot;
+function getRendererAgentBoot() {
+  return initRendererAgentInstaller().getBootSource();
 }
 
 function installRendererAgent(webContents) {
-  const boot = getRendererAgentBoot();
-  if (!boot || !webContents) return;
-  const run = () => {
-    try { webContents.executeJavaScript(boot, true).catch(() => {}); } catch {}
-  };
-  // A full navigation creates a new document (and therefore a new global), so
-  // install the full agent once when that document is ready. In-page/SPA
-  // navigation keeps the same document and the existing agent instance.
-  webContents.on('dom-ready', run);
-  webContents.on('frame-created', (_e, payload) => {
-    const frame = payload && payload.frame;
-    if (!frame) return;
-    try {
-      frame.on('dom-ready', () => {
-        try { frame.executeJavaScript(boot, true).catch(() => {}); } catch {}
-      });
-    } catch {}
-  });
+  return initRendererAgentInstaller().install(webContents);
 }
 app.on('web-contents-created', (_event, wc) => {
   installRendererAgent(wc);

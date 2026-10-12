@@ -1,0 +1,20 @@
+appId: com.company.copilot.smoke
+productName: copilot-for-linux
+directories:
+  output: dist
+files:
+  - main.js
+  - main.bootstrap.js
+  - app-specific/**
+  - renderer/**
+  - lib/**
+  - test/electron/**
+  - package.json
+asar: true
+linux:
+  executableName: copilot-for-linux
+  target:
+    - dir
+win:
+  target:
+    - dir

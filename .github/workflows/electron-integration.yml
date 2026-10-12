@@ -1,0 +1,40 @@
+name: Electron integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  electron-integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - name: Real Electron integration tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:electron
+      - name: Real Electron integration tests (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:electron
+      - name: Package and smoke Linux target
+        if: runner.os == 'Linux'
+        run: |
+          npm run pack:smoke:linux
+          xvfb-run -a npm run test:packaged
+      - name: Package and smoke Windows target
+        if: runner.os == 'Windows'
+        run: |
+          npm run pack:smoke:win
+          npm run test:packaged
