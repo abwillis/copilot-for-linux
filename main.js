@@ -38,7 +38,6 @@ const {
   CODE_PREVIEW_IFRAME_SELECTOR, DOM_CLEANUP_SELECTORS, DOM_CLEANUP_POLICY, DOM_ADAPTER_CONTRACT, DOM_PRESERVE_CONTENT_SELECTORS,
   PRINT_BUBBLE_CSS,
   VIRTUALIZER_SELECTORS,
-  DOM_SCORE_RULES,
   DOM_COLLECTION_SELECTORS,
   DOM_COLLECTION_KEY_ATTRIBUTES,
   DOM_COLLECTION_ROW_SELECTORS,
@@ -107,7 +106,6 @@ function getRendererAgentBoot() {
       domAdapterContract: DOM_ADAPTER_CONTRACT,
       preserveSelectors: DOM_PRESERVE_CONTENT_SELECTORS,
       virtualizerSelectors: VIRTUALIZER_SELECTORS,
-      scoreRules: DOM_SCORE_RULES,
       collectionSelectors: DOM_COLLECTION_SELECTORS,
       collectionKeyAttributes: DOM_COLLECTION_KEY_ATTRIBUTES,
       collectionRowSelectors: DOM_COLLECTION_ROW_SELECTORS,
@@ -362,7 +360,11 @@ async function showSelectorHealth() {
     { __rendererApiOptions: { rendererApiGlobal: RENDERER_API_GLOBAL } }
   );
   const best = results.map(r => r && r.value).filter(v => v && v.ok)
-    .sort((a, b) => Number(b.selectedRootConfidence || 0) - Number(a.selectedRootConfidence || 0))[0];
+    .sort((a, b) => {
+      const confidence = Number(b.selectedRootConfidence || 0) - Number(a.selectedRootConfidence || 0);
+      if (confidence) return confidence;
+      return Number(b.selectedRootTextLength || 0) - Number(a.selectedRootTextLength || 0);
+    })[0];
   const caps = best?.capabilities || {};
   const completeness = best?.exportCompleteness || {};
   const thresholds = best?.exportThresholds || {};

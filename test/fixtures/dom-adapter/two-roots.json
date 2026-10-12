@@ -23,6 +23,13 @@
               { "tag": "article", "attrs": { "aria-posinset": "4", "data-message-id": "chat-4" }, "text": "Answer two" },
               { "tag": "article", "attrs": { "aria-posinset": "5", "data-message-id": "chat-5" }, "text": "Question three" }
             ]
+          },
+          {
+            "tag": "form",
+            "attrs": { "id": "composer-shell" },
+            "children": [
+              { "tag": "textarea", "attrs": { "id": "composer-editor", "aria-label": "Send a message" } }
+            ]
           }
         ]
       }

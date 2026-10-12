@@ -112,6 +112,43 @@ test('shared contract scores two plausible roots and chooses the stronger conver
   assert.equal(located.confidence, hit.confidence);
 });
 
+test('all root consumers report the capability scorer winner', async t => {
+  const contract = deepClone(SHARED_CONTRACT);
+  contract.thresholds.destructive = 70;
+  const { api, document } = useHarness(t, 'two-roots.json', {
+    config: sharedAgentConfig(contract),
+  });
+
+  const authoritative = api.findCapability('chatRoot');
+  const compatibility = api.pickBest();
+  const located = api.locateChatRoot({ includeHtml: false });
+  const selected = api.locateChatRoot({ includeHtml: false, selectContent: true });
+  const exported = api.locateChatRoot({ includeHtml: false, markForExport: true });
+  const find = api.enableFindContentVisibility();
+  const health = api.getDomAdapterHealth();
+  const composer = await api.waitForChatInputReady({ timeoutMs: 5 });
+
+  assert.equal(authoritative.element.id, 'conversation-feed');
+  assert.equal(compatibility.el, authoritative.element);
+  assert.equal(compatibility.score, authoritative.confidence);
+  assert.equal(document.querySelector('[data-pdf-export-target="1"]').id, 'conversation-feed');
+  assert.equal(document.querySelector('[data-app-find-root="1"]').id, 'conversation-feed');
+  assert.equal(composer.ready, true);
+  assert.deepEqual(
+    new Set([
+      compatibility.rootIdentity,
+      located.rootIdentity,
+      selected.rootIdentity,
+      exported.rootIdentity,
+      find.rootIdentity,
+      health.rootIdentity,
+      health.selectedRoot,
+      composer.rootIdentity,
+    ]),
+    new Set(['div#conversation-feed'])
+  );
+});
+
 test('provider adapter selects its expected root from a realistic provider fixture', t => {
   const fixture = loadFixture('provider-root.json');
   const { api } = useHarness(t, fixture, { config: defaultAgentConfig() });

@@ -789,9 +789,23 @@ function createLayoutCSS(deps = {}) {
                 }
             } catch {}
             const values = (results || []).map(r => r?.value).filter(Boolean);
+            const authoritative = (results || [])
+                .map(result => ({ frameId: result?.frameId, value: result?.value }))
+                .filter(result => result.value?.rootFound)
+                .sort((a, b) => {
+                    const confidence = Number(b.value?.rootConfidence || 0)
+                        - Number(a.value?.rootConfidence || 0);
+                    if (confidence) return confidence;
+                    return Number(b.value?.rootTextLength || 0)
+                        - Number(a.value?.rootTextLength || 0);
+                })[0];
             return {
                 ok: values.some(value => value.ok),
                 rootFound: values.some(value => value.rootFound),
+                rootIdentity: authoritative?.value?.rootIdentity || null,
+                rootConfidence: Number(authoritative?.value?.rootConfidence || 0),
+                rootTier: authoritative?.value?.rootTier || 'none',
+                rootFrameId: authoritative?.frameId ?? null,
                 needsScrollWalk: values.some(value => value.needsScrollWalk),
                 frames: results || [],
             };

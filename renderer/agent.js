@@ -71,17 +71,14 @@
   var DYNAMIC_WIDTH_MAX_VW = 100;
   var DYNAMIC_WIDTH_DEFAULT_VW = 100;
 
-  // Per-app scoring / collection config, populated by init() from each app's
-  // lib/chat-dom.js.  Keep this file generic: no Copilot/Gemini/Grok DOM
-  // fingerprints belong here.
-  var DOM_SCORE_RULES = [];
+  // Per-app collection config, populated by init() from each app's
+  // lib/chat-dom.js. Root scoring is owned exclusively by the capability
+  // contract below; legacy scoreRules are no longer a second decision path.
   var DOM_COLLECTION_SELECTORS = [];
   var DOM_COLLECTION_KEY_ATTRIBUTES = [];
   var DOM_COLLECTION_ROW_SELECTORS = [];
   var DOM_COLLECTION_EXCLUDE_SELECTORS = [];
   var REASONING_EXPAND_SELECTORS = [];
-  var DOM_SCORE_VISIBLE = 1000;
-  var DOM_SCORE_TEXT_MAX = 500;
 
   // Attribute used to disambiguate the chosen pane during PDF export.
   var EXPORT_MARKER_ATTR = 'data-pdf-export-target';
@@ -171,48 +168,22 @@
     return null;
   }
 
-  function countSelectorMatches(el, selector) {
-    if (!el || !selector) return 0;
-    var count = 0;
-    try {
-      if (el.querySelectorAll) count += el.querySelectorAll(selector).length || 0;
-    } catch (e) {}
-    return count;
-  }
-
-  function scoreElement(el) {
-    var score = 0;
-    try {
-      if (visible(el)) score += DOM_SCORE_VISIBLE;
-      for (var i = 0; i < DOM_SCORE_RULES.length; i++) {
-        var rule = DOM_SCORE_RULES[i] || {};
-        var selector = String(rule.selector || '').trim();
-        var weight = Number(rule.weight || 0);
-        if (!selector || !weight) continue;
-        score += countSelectorMatches(el, selector) * weight;
-      }
-      score += Math.min(String(el.innerText || '').length, DOM_SCORE_TEXT_MAX);
-    } catch (e) {}
-    return score;
-  }
-
+  // Compatibility for older callers. There is deliberately no independent
+  // selector/score ladder here: every root consumer receives the capability
+  // system's winner and confidence.
   function pickBest() {
-    var found = [];
-    for (var i = 0; i < CHAT_ROOT_SELECTORS.length; i++) {
-      var sel = CHAT_ROOT_SELECTORS[i];
-      try {
-        document.querySelectorAll(sel).forEach(function (el) {
-          found.push({ sel: sel, el: el });
-        });
-      } catch (e) {}
-    }
-    if (!found.length) return null;
-    var scored = found.map(function (entry) {
-      return { sel: entry.sel, el: entry.el, score: scoreElement(entry.el) };
-    });
-    scored.sort(function (a, b) { return b.score - a.score; });
-    var best = scored[0];
-    return (best && best.el) ? best : null;
+    var hit = findCapability('chatRoot');
+    if (!hit || !hit.ok || !hit.element) return null;
+    return {
+      sel: hit.selector,
+      el: hit.element,
+      score: Number(hit.confidence || 0),
+      confidence: Number(hit.confidence || 0),
+      evidence: hit.evidence || [],
+      warnings: hit.warnings || [],
+      tier: hit.tier || 'none',
+      rootIdentity: rootIdentityForHit(hit)
+    };
   }
 
   function selectNodeContents(el) {
@@ -395,6 +366,7 @@
 
     var rootHit = findCapability('chatRoot');
     if (!rootHit || !rootHit.ok || !rootHit.element) return null;
+    var rootIdentity = rootIdentityForHit(rootHit);
     var requiredLevel = markForExport ? 'destructive' : 'read';
     var requiredConfidence = capabilityThreshold(requiredLevel);
     if (Number(rootHit.confidence || 0) < requiredConfidence) {
@@ -404,6 +376,8 @@
         confidence: Number(rootHit.confidence || 0),
         evidence: rootHit.evidence || [],
         warnings: rootHit.warnings || [],
+        rootIdentity: rootIdentity,
+        selectedRoot: rootIdentity,
         requiredConfidence: requiredConfidence,
         operationLevel: requiredLevel
       };
@@ -462,6 +436,8 @@
       evidence: rootHit.evidence || [],
       warnings: rootHit.warnings || [],
       fallbackTier: rootHit.tier || 'none',
+      rootIdentity: rootIdentity,
+      selectedRoot: rootIdentity,
       selectedTextLength: selectedTextLength,
       markerApplied: markForExport,
       markerAttr: markForExport ? EXPORT_MARKER_ATTR : null,
@@ -2093,6 +2069,9 @@
     } catch (e) {
       return '';
     }
+  }
+  function rootIdentityForHit(hit) {
+    return hit && hit.element ? elementLabel(hit.element) : null;
   }
 
   function scrollRange(el) {
@@ -4050,8 +4029,12 @@
         tier: hit.tier || 'none'
       };
     });
-    result.selectedRoot = root.element ? elementLabel(root.element) : null;
+    result.rootIdentity = rootIdentityForHit(root);
+    result.selectedRoot = result.rootIdentity;
     result.selectedRootConfidence = Number(root.confidence || 0);
+    result.selectedRootTextLength = root.element
+      ? String(root.element.innerText || root.element.textContent || '').length
+      : 0;
     result.activeFallbackTier = root.tier || 'none';
     var rows = root.element ? getDiagnosticRows(root.element) : [];
     var stableRows = countStableRowIdentifiers(rows);
@@ -4115,18 +4098,9 @@
     if (Number.isFinite(Number(c.dynamicWidthDefaultVw))) {
       DYNAMIC_WIDTH_DEFAULT_VW = Number(c.dynamicWidthDefaultVw);
     }
-    if (Array.isArray(c.scoreRules)) {
-      DOM_SCORE_RULES = c.scoreRules
-        .map(function (rule) {
-          return {
-            selector: String((rule && rule.selector) || '').trim(),
-            weight: Number((rule && rule.weight) || 0)
-          };
-        })
-        .filter(function (rule) {
-          return !!rule.selector && !!rule.weight;
-        });
-    }
+    // scoreRules, visibleScore, and textScoreMax are accepted as inert legacy
+    // fields so older boot payloads remain valid. findCapability('chatRoot') is
+    // the sole root scorer.
     if (Array.isArray(c.collectionSelectors)) {
       DOM_COLLECTION_SELECTORS = c.collectionSelectors
         .map(function (selector) { return String(selector || '').trim(); })
@@ -4152,12 +4126,6 @@
         .map(function (selector) { return String(selector || '').trim(); })
         .filter(Boolean);
     }
-    if (Number.isFinite(Number(c.visibleScore))) {
-      DOM_SCORE_VISIBLE = Number(c.visibleScore);
-    }
-    if (Number.isFinite(Number(c.textScoreMax))) {
-      DOM_SCORE_TEXT_MAX = Number(c.textScoreMax);
-    }
     return { ok: true };
   }
 
@@ -4174,13 +4142,8 @@
   var findVisibilityState = null;
 
   function findVisibilityRoot() {
-    try {
-      for (var i = 0; i < CHAT_ROOT_SELECTORS.length; i++) {
-        var el = document.querySelector(CHAT_ROOT_SELECTORS[i]);
-        if (el) return el;
-      }
-    } catch (e) {}
-    return null;
+    var hit = findCapability('chatRoot');
+    return hit && hit.ok && hit.element ? hit : null;
   }
 
   function findVisibilityMutationEntry(state, el) {
@@ -4359,9 +4322,17 @@
 
   function enableFindContentVisibility() {
     try {
-      var chatRoot = findVisibilityRoot();
+      var rootHit = findVisibilityRoot();
+      var chatRoot = rootHit && rootHit.element;
       if (!chatRoot) {
-        return { ok: true, rootFound: false, needsScrollWalk: false, overridden: 0 };
+        return {
+          ok: true,
+          rootFound: false,
+          rootIdentity: null,
+          rootConfidence: 0,
+          needsScrollWalk: false,
+          overridden: 0
+        };
       }
 
       if (findVisibilityState && findVisibilityState.root !== chatRoot) {
@@ -4422,6 +4393,10 @@
       return {
         ok: true,
         rootFound: true,
+        rootIdentity: rootIdentityForHit(rootHit),
+        rootConfidence: Number(rootHit.confidence || 0),
+        rootTextLength: String(chatRoot.innerText || chatRoot.textContent || '').length,
+        rootTier: rootHit.tier || 'none',
         needsScrollWalk: !!plan.needsScrollWalk,
         scrollerRange: Number(plan.range || 0),
         scrollerLabel: plan.scrollerLabel || '',
@@ -4572,14 +4547,19 @@
   // -------------------------------------------------------------------------
   function findFirstChatInput() {
     var root = findCapability('chatRoot');
-    var hit = findCapability('composer', { root: root.element || null, verifyBehavior: true });
+    var hit = findCapability('composer', {
+      root: root && root.element || null,
+      verifyBehavior: true
+    });
     if (!hit || !hit.ok || hit.confidence < capabilityThreshold('interact')) return null;
     return {
       el: hit.element,
       selector: hit.selector,
       confidence: hit.confidence,
       evidence: hit.evidence,
-      warnings: hit.warnings
+      warnings: hit.warnings,
+      rootIdentity: rootIdentityForHit(root),
+      rootConfidence: Number(root && root.confidence || 0)
     };
   }
 
@@ -4611,7 +4591,9 @@
           selector: immediate.selector,
           confidence: immediate.confidence,
           evidence: immediate.evidence,
-          warnings: immediate.warnings
+          warnings: immediate.warnings,
+          rootIdentity: immediate.rootIdentity,
+          rootConfidence: immediate.rootConfidence
         });
         return;
       }
@@ -4637,7 +4619,9 @@
             selector: hit.selector,
             confidence: hit.confidence,
             evidence: hit.evidence,
-            warnings: hit.warnings
+            warnings: hit.warnings,
+            rootIdentity: hit.rootIdentity,
+            rootConfidence: hit.rootConfidence
           });
         });
 
@@ -4698,6 +4682,8 @@
   ];
   var composerMarked = [];
   var composerEditor = null;
+  var composerRootIdentity = null;
+  var composerRootConfidence = 0;
   var composerObserver = null;
   var composerTimer = null;
   var COMPOSER_THROTTLE_MS = 300;
@@ -4705,13 +4691,11 @@
   // A wrapper that also contains the transcript, or a nav/header landmark, is
   // the app shell. Same two structural guards the old CSS used, expressed as
   // querySelector instead of :not(:has(...)).
-  function isComposerShell(el) {
+  function isComposerShell(el, chatRoot) {
     if (!el || !el.querySelector) return false;
-    for (var i = 0; i < CHAT_ROOT_SELECTORS.length; i++) {
-      try {
-        if (el.querySelector(CHAT_ROOT_SELECTORS[i])) return true;
-      } catch (e) {}
-    }
+    try {
+      if (chatRoot && (el === chatRoot || el.contains(chatRoot))) return true;
+    } catch (e) {}
     var shellSel = safeSelectorList(COMPOSER_SHELL_SELECTORS);
     if (shellSel) {
       try {
@@ -4724,17 +4708,23 @@
   // Multiline editors only -- CHAT_INPUT_SELECTORS is supplied by each app's
   // lib/chat-dom.js, so a bare <input> (sidebar search) is never a candidate.
   function findComposerEditor() {
-    var hit = findCapability('composer');
+    var root = findCapability('chatRoot');
+    var hit = findCapability('composer', { root: root && root.element || null });
     if (!hit || !hit.ok || hit.confidence < capabilityThreshold('interact')) return null;
-    return hit.element;
+    return {
+      editor: hit.element,
+      root: root && root.element || null,
+      rootIdentity: rootIdentityForHit(root),
+      rootConfidence: Number(root && root.confidence || 0)
+    };
   }
 
-  function findComposerWrapperChain(editor) {
+  function findComposerWrapperChain(editor, chatRoot) {
     var chain = [];
     if (!editor) return chain;
     var n = editor.parentElement;
     while (n && n !== document.body && n !== document.documentElement) {
-      if (isComposerShell(n)) break;
+      if (isComposerShell(n, chatRoot)) break;
       chain.push(n);
       n = n.parentElement;
     }
@@ -4775,15 +4765,28 @@
           }
         }
         if (intact) {
-          return { ok: true, changed: false, marked: composerMarked.length };
+          return {
+            ok: true,
+            changed: false,
+            marked: composerMarked.length,
+            rootIdentity: composerRootIdentity,
+            rootConfidence: composerRootConfidence
+          };
         }
       }
 
-      var editor = findComposerEditor();
-      var chain = findComposerWrapperChain(editor);
+      var discovery = findComposerEditor();
+      var editor = discovery && discovery.editor;
+      var chain = findComposerWrapperChain(editor, discovery && discovery.root);
 
       if (composerEditor === editor && sameComposerChain(composerMarked, chain)) {
-        return { ok: true, changed: false, marked: composerMarked.length };
+        return {
+          ok: true,
+          changed: false,
+          marked: composerMarked.length,
+          rootIdentity: composerRootIdentity,
+          rootConfidence: composerRootConfidence
+        };
       }
 
       // Drop stale markers, including any left by an interrupted run.
@@ -4803,12 +4806,16 @@
 
       composerEditor = editor;
       composerMarked = chain;
+      composerRootIdentity = discovery && discovery.rootIdentity || null;
+      composerRootConfidence = Number(discovery && discovery.rootConfidence || 0);
 
       return {
         ok: true,
         changed: true,
         marked: chain.length,
-        editorFound: !!editor
+        editorFound: !!editor,
+        rootIdentity: composerRootIdentity,
+        rootConfidence: composerRootConfidence
       };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -4841,7 +4848,13 @@
         childList: true,
         subtree: true
       });
-      return { ok: true, installed: true, initial: first };
+      return {
+        ok: true,
+        installed: true,
+        initial: first,
+        rootIdentity: first && first.rootIdentity || null,
+        rootConfidence: Number(first && first.rootConfidence || 0)
+      };
     } catch (e) {
       composerObserver = null;
       return { ok: false, installed: false, error: String((e && e.message) || e) };
@@ -4860,6 +4873,8 @@
     clearComposerMarkers(composerMarked);
     composerMarked = [];
     composerEditor = null;
+    composerRootIdentity = null;
+    composerRootConfidence = 0;
     return { ok: true, uninstalled: true };
   }
 
@@ -7016,6 +7031,7 @@ function waitForPrintableAssets(options) {
       captureExportCompleteness: captureExportCompleteness,
       sanitizeExportHtml: sanitizeExportHtml,
       measureChatScroller: measureChatScroller,
+      pickBest: pickBest,
       findCapability: findCapability,
       getDomAdapterHealth: getDomAdapterHealth
     }),
