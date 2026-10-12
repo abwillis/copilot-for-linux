@@ -1,0 +1,14 @@
+{
+  "body": {
+    "children": [
+      {
+        "tag": "main",
+        "attrs": { "id": "chat-root", "role": "main" },
+        "children": [
+          { "tag": "article", "attrs": { "aria-posinset": "1", "data-message-id": "turn-1" }, "text": "One" },
+          { "tag": "article", "attrs": { "aria-posinset": "2", "data-message-id": "turn-2" }, "text": "Two" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "body": {
+    "children": [
+      { "tag": "main", "attrs": { "id": "workspace" }, "text": "A generic workspace without repeated chat messages" }
+    ]
+  }
+}

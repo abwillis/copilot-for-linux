@@ -1,0 +1,31 @@
+{
+  "body": {
+    "children": [
+      {
+        "tag": "section",
+        "attrs": { "id": "workspace" },
+        "children": [
+          {
+            "tag": "div",
+            "attrs": { "id": "secondary-feed", "role": "feed", "data-chat-root": "candidate" },
+            "children": [
+              { "tag": "article", "attrs": { "aria-posinset": "1", "data-message-id": "secondary-1" }, "text": "Secondary item one" },
+              { "tag": "article", "attrs": { "aria-posinset": "2", "data-message-id": "secondary-2" }, "text": "Secondary item two" }
+            ]
+          },
+          {
+            "tag": "div",
+            "attrs": { "id": "conversation-feed", "role": "feed", "data-chat-root": "candidate" },
+            "children": [
+              { "tag": "article", "attrs": { "aria-posinset": "1", "data-message-id": "chat-1" }, "text": "Question one" },
+              { "tag": "article", "attrs": { "aria-posinset": "2", "data-message-id": "chat-2" }, "text": "Answer one" },
+              { "tag": "article", "attrs": { "aria-posinset": "3", "data-message-id": "chat-3" }, "text": "Question two" },
+              { "tag": "article", "attrs": { "aria-posinset": "4", "data-message-id": "chat-4" }, "text": "Answer two" },
+              { "tag": "article", "attrs": { "aria-posinset": "5", "data-message-id": "chat-5" }, "text": "Question three" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

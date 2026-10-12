@@ -1,0 +1,45 @@
+{
+  "body": {
+    "children": [
+      {
+        "tag": "div",
+        "attrs": { "id": "app-shell" },
+        "children": [
+          {
+            "tag": "aside",
+            "children": [
+              {
+                "tag": "div",
+                "attrs": { "role": "search" },
+                "children": [
+                  { "tag": "textarea", "attrs": { "id": "search-box", "aria-label": "Search" } }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "div",
+            "attrs": { "id": "conversation", "role": "feed", "data-chat-root": "candidate" },
+            "children": [
+              { "tag": "article", "attrs": { "aria-posinset": "1", "data-message-id": "message-1" }, "text": "Hello" },
+              { "tag": "article", "attrs": { "aria-posinset": "2", "data-message-id": "message-2" }, "text": "Hi there" }
+            ]
+          },
+          {
+            "tag": "div",
+            "attrs": { "id": "composer-region" },
+            "children": [
+              {
+                "tag": "form",
+                "attrs": { "id": "composer-form" },
+                "children": [
+                  { "tag": "textarea", "attrs": { "id": "composer-editor", "aria-label": "Message" } }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "expectedRootId": "message-list",
+  "body": {
+    "children": [
+      {
+        "tag": "div",
+        "attrs": { "id": "mainChat", "role": "main" },
+        "children": [
+          {
+            "tag": "div",
+            "attrs": { "id": "message-list", "role": "feed", "data-testid": "MessageListContainer" },
+            "children": [
+              { "tag": "article", "attrs": { "role": "article", "aria-posinset": "1", "data-message-id": "copilot-1" }, "text": "Copilot question" },
+              { "tag": "article", "attrs": { "role": "article", "aria-posinset": "2", "data-message-id": "copilot-2" }, "text": "Copilot answer" },
+              { "tag": "article", "attrs": { "role": "article", "aria-posinset": "3", "data-message-id": "copilot-3" }, "text": "Copilot follow-up" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

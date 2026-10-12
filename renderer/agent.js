@@ -1078,7 +1078,10 @@
     if (!messageSelector) return [];
     var candidates = [];
     try {
-      if (root.matches && root.matches(messageSelector)) candidates.push(root);
+      // The selected conversation root is a collection container, not one
+      // logical turn. A broad provider selector can legitimately match that
+      // container. Including it here makes the outermost-owner dedupe below
+      // discard every real descendant row, so only descendants are eligible.
       candidates = candidates.concat(Array.from(root.querySelectorAll(messageSelector)));
     } catch (e) {
       candidates = [];

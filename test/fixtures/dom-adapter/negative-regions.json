@@ -1,0 +1,8 @@
+{
+  "cases": [
+    { "name": "navigation", "region": { "tag": "nav", "attrs": { "aria-label": "Primary navigation" } } },
+    { "name": "dialog", "region": { "tag": "section", "attrs": { "role": "dialog", "aria-label": "Settings" } } },
+    { "name": "menu", "region": { "tag": "div", "attrs": { "role": "menu", "aria-label": "Commands" } } },
+    { "name": "toolbar", "region": { "tag": "div", "attrs": { "role": "toolbar", "aria-label": "Formatting" } } }
+  ]
+}

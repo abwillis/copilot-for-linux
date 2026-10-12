@@ -1,0 +1,7 @@
+{
+  "body": {
+    "children": [
+      { "tag": "section", "attrs": { "id": "application-shell" }, "text": "Loading" }
+    ]
+  }
+}

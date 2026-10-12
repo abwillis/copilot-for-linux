@@ -1,0 +1,46 @@
+{
+  "body": {
+    "children": [
+      {
+        "tag": "div",
+        "attrs": { "id": "app-shell" },
+        "children": [
+          {
+            "tag": "div",
+            "attrs": { "id": "conversation", "role": "feed", "data-chat-root": "candidate" },
+            "children": [
+              { "tag": "article", "attrs": { "aria-posinset": "1", "data-message-id": "message-1" }, "text": "First turn" },
+              { "tag": "article", "attrs": { "aria-posinset": "2", "data-message-id": "message-2" }, "text": "Second turn" }
+            ]
+          },
+          {
+            "tag": "section",
+            "attrs": { "id": "route-a-composer" },
+            "children": [
+              {
+                "tag": "form",
+                "attrs": { "id": "route-a-form" },
+                "children": [
+                  { "tag": "div", "attrs": { "id": "composer-a", "role": "textbox", "contenteditable": "true" } }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "replacement": {
+    "tag": "section",
+    "attrs": { "id": "route-b-composer" },
+    "children": [
+      {
+        "tag": "form",
+        "attrs": { "id": "route-b-form" },
+        "children": [
+          { "tag": "div", "attrs": { "id": "composer-b", "role": "textbox", "contenteditable": "true" } }
+        ]
+      }
+    ]
+  }
+}

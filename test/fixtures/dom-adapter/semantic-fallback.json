@@ -1,0 +1,25 @@
+{
+  "body": {
+    "children": [
+      {
+        "tag": "div",
+        "children": [
+          {
+            "tag": "section",
+            "attrs": { "role": "log", "aria-label": "Conversation" },
+            "children": [
+              { "tag": "article", "attrs": { "aria-posinset": "1" }, "text": "Semantic question" },
+              { "tag": "article", "attrs": { "aria-posinset": "2" }, "text": "Semantic answer" }
+            ]
+          },
+          {
+            "tag": "form",
+            "children": [
+              { "tag": "div", "attrs": { "role": "textbox", "contenteditable": "true", "aria-label": "Send a message" } }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
