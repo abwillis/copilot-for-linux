@@ -11,6 +11,7 @@ const state = {
   effects: [],
   validationTimer: null,
   saving: false,
+  validating: false,
 };
 
 const form = document.getElementById('settings-form');
@@ -172,7 +173,29 @@ function render() {
 
     sectionsHost.append(fragment);
   }
+  updateCurrentSection();
   updateUiState();
+}
+
+function updateCurrentSection() {
+  const links = Array.from(nav.querySelectorAll('a'));
+  const current = links.find(link => link.hash === window.location?.hash) || links[0];
+  for (const link of links) {
+    if (link === current) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  }
+}
+
+window.addEventListener('hashchange', updateCurrentSection);
+
+function focusFirstInvalidField() {
+  const control = form.querySelector('[aria-invalid="true"]:not(:disabled)');
+  if (control) {
+    control.focus({ preventScroll: true });
+    control.scrollIntoView({ block: 'center', behavior: 'instant' });
+  } else {
+    message.focus();
+  }
 }
 
 function setMessage(text, kind = '') {
@@ -196,7 +219,8 @@ function updateUiState() {
   const dirty = isDirty();
   const invalid = Object.keys(state.errors).length > 0;
   dirtyBadge.hidden = !dirty;
-  saveButton.disabled = !dirty || invalid || state.saving;
+  sectionsHost.setAttribute('aria-busy', String(state.validating || state.saving));
+  saveButton.disabled = !dirty || invalid || state.saving || state.validating;
   resetButton.disabled = !dirty || state.saving;
 
   const reload = state.effects.filter(item => item.effect === 'reload').map(item => item.label);
@@ -215,6 +239,8 @@ function updateUiState() {
 async function validate() {
   if (state.saving) return;
   const generation = ++state.validationGeneration;
+  state.validating = true;
+  updateUiState();
   try {
     const result = await window.appSettings.validate(collectPatch());
     if (generation !== state.validationGeneration || state.saving) return;
@@ -225,13 +251,18 @@ async function validate() {
     if (generation !== state.validationGeneration || state.saving) return;
     state.errors = { _form: String(error?.message || error) };
     setMessage('Settings could not be validated.', 'error');
+  } finally {
+    if (generation === state.validationGeneration && !state.saving) {
+      state.validating = false;
+      updateUiState();
+    }
   }
-  updateUiState();
 }
 
 // Invalidate both in-flight responses and work still waiting in the debounce.
 function invalidateValidation() {
   state.validationGeneration += 1;
+  state.validating = false;
   if (state.validationTimer !== null) clearTimeout(state.validationTimer);
   state.validationTimer = null;
 }
@@ -239,6 +270,7 @@ function invalidateValidation() {
 function scheduleValidation() {
   invalidateValidation();
   if (state.saving) return;
+  state.validating = true;
   state.validationTimer = setTimeout(() => {
     state.validationTimer = null;
     void validate();
@@ -274,11 +306,13 @@ form.addEventListener('submit', async event => {
   invalidateValidation();
   updateUiState();
   setMessage('Validating and saving…');
+  let saveFailed = false;
   try {
     const result = await window.appSettings.save(collectPatch());
     state.errors = result.errors || {};
     state.effects = result.effects || [];
     if (!result.valid) {
+      saveFailed = true;
       setMessage('Fix the highlighted settings before saving.', 'error');
       return;
     }
@@ -294,10 +328,12 @@ form.addEventListener('submit', async event => {
     if (applyErrors.length) details.push(applyErrors.map(item => item.message).join(' '));
     setMessage(details.length ? `Settings saved. ${details.join(' ')}` : 'Settings saved and applied.', applyErrors.length ? 'error' : 'success');
   } catch (error) {
+    saveFailed = true;
     setMessage(`Settings could not be saved: ${String(error?.message || error)}`, 'error');
   } finally {
     state.saving = false;
     updateUiState();
+    if (saveFailed) focusFirstInvalidField();
   }
 });
 

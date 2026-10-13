@@ -175,3 +175,23 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .field-error { grid-column: 1; margin-top: 0; }
   .control-wrap { max-width: none; }
 }
+
+
+/* Reflow keeps controls reachable without fixed-height overlays. */
+nav a[aria-current="location"] { background: var(--badge); font-weight: 600; }
+nav a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.app-header > div, .actions > *, .field > * { min-width: 0; }
+.actions, .app-header { flex-wrap: wrap; }
+button, .effect-summary { overflow-wrap: anywhere; white-space: normal; }
+@media (max-width: 720px), (max-height: 600px) {
+  .app-header, .actions, nav { position: static; }
+  .app-header { padding: 14px; gap: 12px; }
+  .actions { justify-content: flex-start; }
+  .effect-summary { flex-basis: 100%; }
+  .settings-section { scroll-margin-top: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important; transition: none !important; scroll-behavior: auto !important;
+  }
+}

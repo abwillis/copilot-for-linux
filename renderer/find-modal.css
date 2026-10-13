@@ -1,22 +1,46 @@
-:root { color-scheme: light dark; }
-html, body { margin: 0; height: 100%; }
+/* Shared Find and Rename dialog treatment. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --text: #202020; --muted: #555555;
+  --border: #767676; --focus: #005a9e; --error: #9a3412; --success: #166534;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #202020; --text: #f5f5f5; --muted: #cccccc;
+    --border: #999999; --focus: #79bfff; --error: #ffb399; --success: #8cdb9e;
+  }
+}
+* { box-sizing: border-box; }
+html { min-height: 100%; }
 body {
-  background: transparent;
-  font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI",
-        Roboto, "Helvetica Neue", Arial, sans-serif;
-  color: inherit;
+  margin: 0; padding: 12px; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, "Segoe UI", Arial, sans-serif; overflow-wrap: anywhere;
 }
-.row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  background: canvas;
-  border: 1px solid canvastext;
-  border-radius: 6px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+.row, .actions, .status-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.actions { margin-top: 10px; justify-content: flex-end; }
+.status-row { margin-top: 8px; min-height: 24px; }
+input[type="text"] {
+  width: 100%; min-width: 0; flex: 1 1 12rem; padding: 6px 8px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border);
 }
-#q { flex: 1; min-width: 120px; padding: 4px 6px; }
-.count { min-width: 6ch; text-align: right; opacity: 0.7; }
-button { padding: 2px 8px; cursor: pointer; }
-.mm { display: inline-flex; gap: 4px; align-items: center; }
+input::placeholder { color: var(--muted); opacity: 1; }
+label { color: var(--text); }
+#lbl { display: block; margin-bottom: 4px; }
+button {
+  min-height: 32px; max-width: 100%; padding: 5px 10px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; white-space: normal; overflow-wrap: anywhere; cursor: pointer;
+}
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.status { flex: 1 1 10rem; min-width: 0; color: var(--muted); }
+.status.searching { color: var(--muted); }
+.status.none { color: var(--error); }
+.status.ok { color: var(--success); }
+[hidden] { display: none !important; }
+#snippets { margin: 8px 0 0; padding: 0; max-height: 30vh; overflow: auto; list-style: none; }
+#snippets button { width: 100%; text-align: left; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important; transition: none !important; scroll-behavior: auto !important;
+  }
+}

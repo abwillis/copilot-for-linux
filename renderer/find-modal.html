@@ -1,39 +1,26 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Find in Page</title>
-  <style>
-    body { font-family: system-ui, "Segoe UI", Arial, sans-serif; margin: 12px; }
-    .row { display: flex; gap: 8px; align-items: center; }
-    input[type=text] { flex: 1; padding: 6px 8px; }
-    .actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
-    .status-row { margin-top: 8px; min-height: 24px; display: flex; gap: 8px; align-items: center; }
-    .status { flex: 1; min-width: 0; font-size: 12px; color: #555; }
-    .status.searching { color: #555; }
-    .status.none { color: #9a3412; }
-    .status.ok { color: #166534; }
-    #cancel-indexing[hidden], #snippets[hidden] { display: none; }
-    #snippets { margin: 8px 0 0; padding: 0; max-height: 72px; overflow: auto; list-style: none; }
-    #snippets button { width: 100%; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-    label { font-size: 12px; color: #444; }
-  </style>
+  <link rel="stylesheet" href="./find-modal.css">
 </head>
 <body>
   <div class="row">
-    <input id="term" type="text" placeholder="Find in page..." autofocus />
+    <input id="term" aria-label="Find in page" type="text" placeholder="Find in page..." autofocus />
     <label><input id="match" type="checkbox"> Match case</label>
   </div>
   <div class="status-row">
-    <div id="status" class="status" aria-live="polite">No active search</div>
-    <button id="cancel-indexing" hidden>Cancel</button>
+    <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true">No active search</div>
+    <button id="cancel-indexing" aria-label="Cancel conversation indexing" hidden>Cancel</button>
   </div>
   <ul id="snippets" hidden></ul>
   <div class="actions">
-    <button id="prev">Previous</button>
-    <button id="next">Next</button>
-    <button id="clear">Clear</button>
-    <button id="close">Close</button>
+    <button id="prev" aria-label="Previous match">Previous</button>
+    <button id="next" aria-label="Next match">Next</button>
+    <button id="clear" aria-label="Clear search highlights">Clear</button>
+    <button id="close" aria-label="Close Find">Close</button>
   </div>
   <script src="./find-modal.js"></script>
 </body>
