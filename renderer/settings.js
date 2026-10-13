@@ -4,7 +4,7 @@ const state = {
   baseline: {},
   defaults: {},
   configuration: {},
-  validationRevision: 0,
+  validationGeneration: 0,
   values: {},
   schema: [],
   errors: {},
@@ -213,25 +213,36 @@ function updateUiState() {
 }
 
 async function validate() {
-  const revision = ++state.validationRevision;
+  if (state.saving) return;
+  const generation = ++state.validationGeneration;
   try {
     const result = await window.appSettings.validate(collectPatch());
-    if (revision !== state.validationRevision || state.saving) return;
+    if (generation !== state.validationGeneration || state.saving) return;
     state.errors = result.errors || {};
     state.effects = result.effects || [];
     if (state.errors._form) setMessage(state.errors._form, 'error');
   } catch (error) {
-    if (revision !== state.validationRevision || state.saving) return;
+    if (generation !== state.validationGeneration || state.saving) return;
     state.errors = { _form: String(error?.message || error) };
     setMessage('Settings could not be validated.', 'error');
   }
   updateUiState();
 }
 
+// Invalidate both in-flight responses and work still waiting in the debounce.
+function invalidateValidation() {
+  state.validationGeneration += 1;
+  if (state.validationTimer !== null) clearTimeout(state.validationTimer);
+  state.validationTimer = null;
+}
+
 function scheduleValidation() {
-  state.validationRevision += 1;
-  if (state.validationTimer) clearTimeout(state.validationTimer);
-  state.validationTimer = setTimeout(() => { void validate(); }, 120);
+  invalidateValidation();
+  if (state.saving) return;
+  state.validationTimer = setTimeout(() => {
+    state.validationTimer = null;
+    void validate();
+  }, 120);
   updateUiState();
 }
 
@@ -246,6 +257,8 @@ function syncControlsFromState() {
 }
 
 function restoreBaseline() {
+  if (state.saving) return;
+  invalidateValidation();
   state.values = JSON.parse(JSON.stringify(state.baseline));
   state.errors = {};
   state.effects = [];
@@ -258,8 +271,7 @@ form.addEventListener('submit', async event => {
   event.preventDefault();
   if (state.saving) return;
   state.saving = true;
-  state.validationRevision += 1;
-  clearTimeout(state.validationTimer);
+  invalidateValidation();
   updateUiState();
   setMessage('Validating and saving…');
   try {
@@ -300,8 +312,7 @@ async function backupAction(action) {
   if ((action === 'restorePrevious' || action === 'importSettings') && isDirty()
       && !window.confirm('Discard unsaved changes if this operation succeeds?')) return;
   state.saving = true;
-  state.validationRevision += 1;
-  clearTimeout(state.validationTimer);
+  invalidateValidation();
   updateUiState();
   try {
     const result = await window.appSettings[action]();
