@@ -2,6 +2,9 @@
 
 const state = {
   baseline: {},
+  defaults: {},
+  configuration: {},
+  validationRevision: 0,
   values: {},
   schema: [],
   errors: {},
@@ -112,6 +115,20 @@ function render() {
     fragment.querySelector('h2').textContent = section.title;
     fragment.querySelector('.section-heading p').textContent = section.description || '';
     const fieldsHost = fragment.querySelector('.fields');
+    const resetSection = document.createElement('button');
+    resetSection.type = 'button';
+    resetSection.textContent = 'Reset section to defaults';
+    resetSection.dataset.sectionReset = section.id;
+    resetSection.addEventListener('click', () => {
+      if (state.saving) return;
+      for (const field of section.fields) {
+        if (Object.hasOwn(state.defaults, field.key)) state.values[field.key] = JSON.parse(JSON.stringify(state.defaults[field.key]));
+      }
+      syncControlsFromState();
+      scheduleValidation();
+      setMessage(`${section.title} reset to defaults. Save changes to apply.`);
+    });
+    fragment.querySelector('.section-heading').append(resetSection);
 
     for (const field of section.fields) {
       const row = document.createElement('div');
@@ -188,16 +205,23 @@ function updateUiState() {
   if (reload.length) parts.push(`Reload required: ${reload.join(', ')}`);
   if (nextLaunch.length) parts.push(`Applies next launch: ${nextLaunch.join(', ')}`);
   effectSummary.textContent = parts.join(' • ');
+  for (const control of form.querySelectorAll('input, select, [data-section-reset]')) control.disabled = state.saving;
+  document.getElementById('restore-previous').disabled = state.saving || !state.configuration.canRestore;
+  document.getElementById('export-settings').disabled = state.saving;
+  document.getElementById('import-settings').disabled = state.saving;
   renderErrors();
 }
 
 async function validate() {
+  const revision = ++state.validationRevision;
   try {
     const result = await window.appSettings.validate(collectPatch());
+    if (revision !== state.validationRevision || state.saving) return;
     state.errors = result.errors || {};
     state.effects = result.effects || [];
     if (state.errors._form) setMessage(state.errors._form, 'error');
   } catch (error) {
+    if (revision !== state.validationRevision || state.saving) return;
     state.errors = { _form: String(error?.message || error) };
     setMessage('Settings could not be validated.', 'error');
   }
@@ -205,6 +229,7 @@ async function validate() {
 }
 
 function scheduleValidation() {
+  state.validationRevision += 1;
   if (state.validationTimer) clearTimeout(state.validationTimer);
   state.validationTimer = setTimeout(() => { void validate(); }, 120);
   updateUiState();
@@ -233,6 +258,8 @@ form.addEventListener('submit', async event => {
   event.preventDefault();
   if (state.saving) return;
   state.saving = true;
+  state.validationRevision += 1;
+  clearTimeout(state.validationTimer);
   updateUiState();
   setMessage('Validating and saving…');
   try {
@@ -246,6 +273,7 @@ form.addEventListener('submit', async event => {
 
     state.values = JSON.parse(JSON.stringify(result.values));
     state.baseline = JSON.parse(JSON.stringify(result.values));
+    showConfiguration(result.configuration);
     syncControlsFromState();
     const applyErrors = result.applyResult?.errors || [];
     const reload = state.effects.filter(item => item.effect === 'reload').map(item => item.label);
@@ -261,6 +289,54 @@ form.addEventListener('submit', async event => {
   }
 });
 
+function showConfiguration(configuration = {}) {
+  state.configuration = configuration;
+  document.getElementById('config-path').textContent = configuration.configPath || 'Unavailable';
+  document.getElementById('recovery-message').textContent = configuration.recovery?.message || '';
+}
+
+async function backupAction(action) {
+  if (state.saving) return;
+  if ((action === 'restorePrevious' || action === 'importSettings') && isDirty()
+      && !window.confirm('Discard unsaved changes if this operation succeeds?')) return;
+  state.saving = true;
+  state.validationRevision += 1;
+  clearTimeout(state.validationTimer);
+  updateUiState();
+  try {
+    const result = await window.appSettings[action]();
+    if (result.cancelled) return;
+    if (result.valid === false) {
+      setMessage(`Operation rejected: ${Object.values(result.errors || {}).join(' ')}`, 'error');
+      return;
+    }
+    if (result.values) {
+      state.values = JSON.parse(JSON.stringify(result.values));
+      if (action === 'restorePrevious') state.baseline = JSON.parse(JSON.stringify(result.values));
+      state.errors = {};
+      state.effects = result.effects || [];
+      if (result.configuration) showConfiguration(result.configuration);
+      syncControlsFromState();
+    }
+    const errors = result.applyResult?.errors || [];
+    const effects = (result.effects || []).filter(item => item.effect !== 'immediate')
+      .map(item => `${item.label}: ${effectLabel(item.effect)}`).join('; ');
+    setMessage(action === 'importSettings' ? 'Imported settings staged for review. Save changes to apply.'
+      : action === 'exportSettings' ? 'Saved settings exported.'
+      : `Previous configuration restored. ${effects} ${errors.map(item => item.message).join(' ')}`,
+      errors.length ? 'error' : 'success');
+  } catch (error) {
+    setMessage(`Operation failed: ${error.message || error}`, 'error');
+  } finally {
+    state.saving = false;
+    updateUiState();
+  }
+}
+
+document.getElementById('restore-previous').addEventListener('click', () => backupAction('restorePrevious'));
+document.getElementById('export-settings').addEventListener('click', () => backupAction('exportSettings'));
+document.getElementById('import-settings').addEventListener('click', () => backupAction('importSettings'));
+
 resetButton.addEventListener('click', restoreBaseline);
 
 window.addEventListener('beforeunload', event => {
@@ -273,6 +349,8 @@ window.addEventListener('beforeunload', event => {
   try {
     const payload = await window.appSettings.get();
     state.schema = payload.schema || [];
+    state.defaults = payload.defaults || {};
+    showConfiguration(payload.configuration);
     state.values = JSON.parse(JSON.stringify(payload.values || {}));
     state.baseline = JSON.parse(JSON.stringify(payload.values || {}));
     document.title = `${payload.appLabel || 'Application'} Settings`;

@@ -163,6 +163,10 @@ button:hover:not(:disabled) { background: var(--accent-hover); }
 button.secondary { color: var(--text); background: transparent; border-color: var(--border); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 
+#config-path { overflow-wrap: anywhere; user-select: text; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#recovery-message:empty { display: none; }
+
 @media (max-width: 720px) {
   main { display: block; padding-inline: 14px; }
   nav { position: static; display: flex; overflow-x: auto; margin-bottom: 12px; }

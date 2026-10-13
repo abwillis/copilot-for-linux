@@ -11,6 +11,13 @@
     <div>
       <h1>Settings</h1>
       <p>Changes are validated locally before config.json is updated.</p>
+      <p>Configuration file: <code id="config-path"></code></p>
+      <p id="recovery-message" role="status"></p>
+      <div class="backup-actions">
+        <button id="restore-previous" type="button">Restore previous configuration</button>
+        <button id="export-settings" type="button">Export saved settings</button>
+        <button id="import-settings" type="button">Import settings</button>
+      </div>
     </div>
     <div id="dirty-badge" class="dirty-badge" hidden>Unsaved changes</div>
   </header>
@@ -22,7 +29,7 @@
       <div id="settings-sections"></div>
       <footer class="actions">
         <span id="effect-summary" class="effect-summary"></span>
-        <button id="reset" type="button" class="secondary">Reset</button>
+        <button id="reset" type="button" class="secondary">Discard unsaved changes</button>
         <button id="save" type="submit" disabled>Save changes</button>
       </footer>
     </form>
