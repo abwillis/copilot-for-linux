@@ -6675,6 +6675,7 @@ function waitForPrintableAssets(options) {
       cancelled: false,
       startedAt: Date.now(),
       startSignature: exportJobSignature(),
+      lastProgress: null,
       onKeyDown: null
     };
     exportJobState.onKeyDown = function (event) {
@@ -6689,15 +6690,48 @@ function waitForPrintableAssets(options) {
     return { ok: true, jobId: exportJobState.jobId };
   }
 
+  // Text shown while an accepted cancellation waits for the in-flight unit of
+  // work (one renderer call, one turn, or one PDF section) to return.
+  var EXPORT_CANCEL_HEADLINE = 'Cancelling \u2014 finishing current turn\u2026';
+  var EXPORT_CANCEL_FOOTER = 'Temporary files will be removed.';
+
+  // Lines are composed in the main process (lib/export-progress.js) from the
+  // canonical store and job metrics; this function only paints them. The
+  // cancelling presentation is sticky: once Escape is accepted here, a
+  // progress message that was already in flight cannot restore
+  // "Press Esc to cancel".
+  function composeExportOverlayLines(p, locallyCancelled) {
+    var lines = [];
+    if (Array.isArray(p.lines)) {
+      for (var i = 0; i < p.lines.length && lines.length < 12; i++) {
+        var line = String(p.lines[i] == null ? '' : p.lines[i]).slice(0, 200);
+        if (line) lines.push(line);
+      }
+    }
+    if (!lines.length && locallyCancelled) return [EXPORT_CANCEL_HEADLINE, EXPORT_CANCEL_FOOTER];
+    if (!lines.length) {
+      var seconds = Math.max(0, Math.round(Number(p.elapsedMs || 0) / 1000));
+      var phase = String(p.phase || 'export');
+      lines = [String(p.message || phase), phase + ' \u2022 ' + seconds + 's elapsed', 'Press Esc to cancel'];
+    }
+    if (locallyCancelled && p.cancelling !== true) {
+      // Main has not observed the abort yet: replace the active headline and
+      // footer, keeping the measurable detail lines in between.
+      var body = lines.slice(1, lines.length - 1);
+      lines = [EXPORT_CANCEL_HEADLINE, String(p.message || '')].concat(body, [EXPORT_CANCEL_FOOTER])
+        .filter(function (value) { return !!value; });
+    }
+    return lines;
+  }
+
   function updateExportJobProgress(progress) {
     var p = progress || {};
     if (!exportJobState || !exportJobState.active) return { ok: false, reason: 'no-active-job' };
     if (p.jobId && String(p.jobId) !== exportJobState.jobId) return { ok: false, reason: 'wrong-job' };
-    var seconds = Math.max(0, Math.round(Number(p.elapsedMs || 0) / 1000));
-    var phase = String(p.phase || 'export');
-    var message = String(p.message || phase);
-    try { showExpandOverlay(message + '\n' + phase + ' \u2022 ' + seconds + 's elapsed\nPress Esc to cancel'); } catch (e) {}
-    return { ok: true, cancelled: exportJobState.cancelled === true };
+    var lines = composeExportOverlayLines(p, exportJobState.cancelled === true);
+    exportJobState.lastProgress = p;
+    try { showExpandOverlay(lines.join('\n')); } catch (e) {}
+    return { ok: true, cancelled: exportJobState.cancelled === true, lines: lines.length };
   }
 
   function cancelExportJob(options) {
@@ -6706,7 +6740,9 @@ function waitForPrintableAssets(options) {
     if (opts.jobId && String(opts.jobId) !== exportJobState.jobId) return { ok: false, reason: 'wrong-job' };
     exportJobState.cancelled = true;
     try { requestExpandCancel(); } catch (e) {}
-    try { showExpandOverlay('Cancelling export\u2026'); } catch (e) {}
+    try {
+      showExpandOverlay(composeExportOverlayLines(exportJobState.lastProgress || {}, true).join('\n'));
+    } catch (e) {}
     return { ok: true, cancelled: true };
   }
 

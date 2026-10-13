@@ -159,6 +159,9 @@ class FixtureElement {
     this.parentNode = null;
     this.ownerDocument = null;
     this._text = String(text || '');
+    // Inline style bag. Overlay code assigns style.cssText; computed styles
+    // still come from window.getComputedStyle() and data-* attributes.
+    this.style = {};
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 0;
@@ -228,6 +231,11 @@ class FixtureElement {
     this.parentElement = null;
     this.parentNode = null;
     parent.ownerDocument?._notify(parent, { type: 'childList', target: parent, addedNodes: [], removedNodes: [this] });
+  }
+  removeChild(child) {
+    if (!child || child.parentElement !== this) throw new Error('NotFoundError: node is not a child');
+    child.remove();
+    return child;
   }
   replaceWith(...nodes) {
     const parent = this.parentElement;
