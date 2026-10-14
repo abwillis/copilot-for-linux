@@ -684,6 +684,7 @@ function initPermissionManager() {
     dialog,
     getAppConfig,
     getAppUrl: () => APP_URL,
+    getTrustedOrigins: () => appConfig.trustedOrigins || [],
   });
   return permissionManagerInstance;
 }

@@ -152,10 +152,15 @@ module.exports = Object.freeze({
   iconFileName: 'copilot-for-linux.png',
   trayToolTip: 'Microsoft Copilot',
   partitionEnvVar: 'COPILOT_PARTITION',
+
   layoutObserverGlobal: '__copilot_layoutObserver',
   rendererApiGlobal: '__copilotRenderer',
   rendererAgentVersion: 7,
-
+  // Additional origins treated as the app itself. The m365 entry URL
+  // redirects to copilot.cloud.microsoft (redirfrom=mcmToCcm).
+  trustedOrigins: Object.freeze([
+    'https://copilot.cloud.microsoft',
+  ]),
   dynamicWidth: Object.freeze({
     cssVar: '--copilot-vw',
     minVw: 83,
