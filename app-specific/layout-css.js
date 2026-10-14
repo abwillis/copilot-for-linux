@@ -622,6 +622,9 @@ function injectCSSIntoAllFrames(win, css) {
                     const frames = wc.mainFrame?.framesInSubtree ?? wc.mainFrame?.frames ?? [];
                     for (const f of frames) {
                         try {
+                            // framesInSubtree includes the main frame, which is handled
+                            // (and its key tracked) by wc.insertCSS() below.
+                            if (f === wc.mainFrame) continue;
                             const rid = (typeof f?.routingId === 'number') ? f.routingId : null;
                             f.insertCSS(css).then(() => { if (rid !== null) injected.add(rid); }).catch(() => {});
                         } catch {}
@@ -867,11 +870,23 @@ function createLayoutCSS(deps = {}) {
         }
         try {
             const runtimeWidth = Number(getRuntimeConfig?.()?.layoutWidthVw);
+            const targetVw = Number.isFinite(runtimeWidth)
+                ? runtimeWidth
+                : Number(dynamicWidth.defaultVw) || VW_SIZE;
             await callRAFrames(
                 { webContents: win.webContents },
                 'setTargetVW',
-                { vw: Number.isFinite(runtimeWidth) ? runtimeWidth : Number(dynamicWidth.defaultVw) || VW_SIZE }
+                { vw: targetVw }
             );
+            // Re-arm the responsive listener with the new target. Otherwise the next
+            // window resize recomputes the width from the pre-Settings percentage.
+            if (win.webContents.__vwResizeAttached) {
+                await callRAFrames(
+                    { webContents: win.webContents },
+                    'startVWResize',
+                    { screenPercent: targetVw }
+                );
+            }
         } catch (err) {
             console.error('applyDynamicWidth failed:', err);
         }
@@ -903,7 +918,11 @@ function createLayoutCSS(deps = {}) {
             }
         };
 
-        wc.once('dom-ready', install);
+        // attachCSSAndLayoutHandlers calls this from ready-to-show, which can fire
+        // after the first dom-ready. Install now and again for every replacement
+        // document; startVWResize is idempotent in the agent.
+        wc.on('dom-ready', install);
+        await install();
     }
     // Install the composer marker tracker. Re-armed on SPA navigation because
     // the agent's MutationObserver is torn down with the document. Idempotent:
