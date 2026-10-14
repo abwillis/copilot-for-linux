@@ -911,7 +911,7 @@ function createLayoutCSS(deps = {}) {
                     'startVWResize',
                     { screenPercent: Number.isFinite(runtimeWidth)
                         ? runtimeWidth
-                        : Number(dynamicWidth.screenPercent) || dynamicWidth.maxVw || MAX_VW }
+                        : Number(dynamicWidth.defaultVw) || dynamicWidth.maxVw || MAX_VW }
                 );
             } catch (err) {
                 console.error('attachVWResize failed:', err);

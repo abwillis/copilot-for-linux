@@ -55,7 +55,6 @@ const defaultAppConfig = Object.freeze({
   // No complete long-conversation snapshot crosses the renderer/main boundary.
   exportCaptureIpcChunkBytes: 524288,
   exportCaptureCallTimeoutMs: 30000,
-  defaultExportFormat: 'pdf',
   defaultPaneExportProfile: 'pdf',
   defaultSelectionExportProfile: 'pdf',
   // Paper treatment for generated HTML/PDF. "match" captures the live
@@ -148,7 +147,7 @@ module.exports = Object.freeze({
   appLabel: 'Copilot',
   appSlug: 'copilot',
   appName: 'copilot-for-linux',
-  appUserModelId: 'your.company.copilot',
+  appUserModelId: 'com.company.copilot',
   iconFileName: 'copilot-for-linux.png',
   trayToolTip: 'Microsoft Copilot',
   partitionEnvVar: 'COPILOT_PARTITION',
@@ -166,7 +165,6 @@ module.exports = Object.freeze({
     minVw: 83,
     maxVw: 100,
     defaultVw: 100,
-    screenPercent: 100,
   }),
 
   defaultAppConfig,

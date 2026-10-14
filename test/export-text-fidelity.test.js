@@ -59,7 +59,9 @@ test('postProcessMarkdown leaves fenced code blocks byte-for-byte intact', () =>
 
 test('postProcessMarkdown still tidies prose outside code fences', () => {
   const { postProcessMarkdown } = exporters();
-  assert.equal(postProcessMarkdown('one\n# Heading\n\n\n\ntwo  \nthree\n- item'), 'one\n\n# Heading\n\ntwo\nthree\n\n- item');
+  // Trailing spaces are dropped, but a two-space <br> hard break before another line is kept.
+  assert.equal(postProcessMarkdown('one\n# Heading\n\n\n\ntwo  \nthree\n- item'), 'one\n\n# Heading\n\ntwo  \nthree\n\n- item');
+  assert.equal(postProcessMarkdown('one \n# Heading\n\ntwo \nthree'), 'one\n\n# Heading\n\ntwo\nthree');
 });
 
 test('markdown tables keep an escaped pipe inside one cell', () => {
