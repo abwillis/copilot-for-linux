@@ -163,6 +163,11 @@ async function runCase(name, testFunction) {
 }
 
 async function main() {
+  // Every case destroys its windows in runCase()'s finally block. With no
+  // 'window-all-closed' listener Electron's default is app.quit(), which ended
+  // the process (exit code 0) after the first case. A no-op listener keeps the
+  // app alive until main() calls app.exit() itself.
+  app.on('window-all-closed', () => {});
   const userData = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'copilot-electron-integration-'));
   app.setPath('userData', userData);
   await app.whenReady();

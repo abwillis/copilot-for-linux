@@ -289,7 +289,8 @@ test('main window only hands web and mail links to the operating system', () => 
 test('quick chat windows only hand web and mail links to the operating system', () => {
   const harness = openHandlerFor(({ BrowserWindow, shell }) => {
     const manager = createQuickChatManager({
-      app: {}, BrowserWindow, Menu: { buildFromTemplate: () => ({}) }, MenuItem: class {},
+      app: {}, BrowserWindow, MenuItem: class {},
+      Menu: { buildFromTemplate: () => ({}), getApplicationMenu: () => null, setApplicationMenu() {} },
       ipcMain: new EventEmitter(), dialog: {}, shell, clipboard: {}, path, dirname: __dirname,
       getMainWindow: () => null, getAppIconImage: () => null,
       getAppConfig: () => ({ enableQuickChat: true }), DEFAULT_APP_CONFIG: {},

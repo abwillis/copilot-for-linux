@@ -147,7 +147,7 @@ module.exports = Object.freeze({
   appLabel: 'Copilot',
   appSlug: 'copilot',
   appName: 'copilot-for-linux',
-  appUserModelId: 'com.company.copilot',
+  appUserModelId: 'com.local.copilot',
   iconFileName: 'copilot-for-linux.png',
   trayToolTip: 'Microsoft Copilot',
   partitionEnvVar: 'COPILOT_PARTITION',

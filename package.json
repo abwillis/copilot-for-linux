@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "3.01.02",
+  "version": "3.01.03",
   "description": "Copilot for Linux",
   "desktopName": "copilot-for-linux",
   "main": "main.js",
@@ -17,7 +17,7 @@
     "dist:win": "electron-builder --win nsis portable"
   },
   "build": {
-    "appId": "com.company.copilot",
+    "appId": "com.local.copilot",
     "productName": "copilot-for-linux",
     "directories": {
       "output": "dist"
@@ -30,8 +30,7 @@
       "package.json",
       "assets/**",
       "lib/**",
-      "test/**",
-      "test-support/**"
+      "test/electron/packaged-smoke.js"
     ],
     "asarUnpack": [
       "**/*.node",
@@ -116,7 +115,6 @@
     "electron-builder": "^26.4.0"
   },
   "dependencies": {
-    "npm": "^11.7.0",
     "pdf-lib": "^1.17.1",
     "turndown": "^7.2.2",
     "turndown-plugin-gfm": "^1.0.2"
