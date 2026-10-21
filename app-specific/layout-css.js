@@ -701,6 +701,16 @@ function buildFindContentVisibilityCSS() {
     `;
 }
 
+// Origin only: log lines must not carry paths or query strings from the page URL.
+function originForLog(url) {
+    try {
+        const parsed = new URL(String(url || ''));
+        return parsed.origin !== 'null' ? parsed.origin : parsed.protocol;
+    } catch {
+        return 'unknown URL';
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Factory: createLayoutCSS(deps)
 // -----------------------------------------------------------------------------
@@ -713,6 +723,13 @@ function buildFindContentVisibilityCSS() {
 // -----------------------------------------------------------------------------
 function createLayoutCSS(deps = {}) {
     const { rendererApiGlobal, dynamicWidth, getRuntimeConfig } = deps;
+    // Pauses between startComposerTracking attempts when a frame has not
+    // received the renderer agent yet (see attachComposerTracking). Injectable
+    // so tests do not wait for real time.
+    const composerRetryDelaysMs = Array.isArray(deps.composerRetryDelaysMs)
+        ? deps.composerRetryDelaysMs.map(Number).filter(ms => Number.isFinite(ms) && ms >= 0)
+        : [250, 750, 2000];
+    const composerRetryStateByWC = new WeakMap();
     const RENDERER_API_OPTIONS = rendererApiGlobal
         ? { __rendererApiOptions: { rendererApiGlobal } }
         : null;
@@ -927,24 +944,50 @@ function createLayoutCSS(deps = {}) {
     // Install the composer marker tracker. Re-armed on SPA navigation because
     // the agent's MutationObserver is torn down with the document. Idempotent:
     // startComposerTracking() disconnects any previous observer first.
+    //
+    // The renderer agent is injected on dom-ready, but this runs from
+    // ready-to-show and did-navigate-in-page as well, and either can fire
+    // before the current document has been injected. A frame that answers
+    // `missing` has not received the agent YET, so it is retried briefly
+    // before being treated as a problem. Only the top frame is reported:
+    // sub-frames (auth, telemetry, preview iframes) are not expected to host
+    // the composer, and the agent is not always injected into them.
     async function attachComposerTracking(win) {
         if (!win?.webContents) return;
         const wc = win.webContents;
 
         const install = async () => {
+            // A newer install supersedes any retry loop still waiting.
+            const state = composerRetryStateByWC.get(wc) || { generation: 0 };
+            composerRetryStateByWC.set(wc, state);
+            const generation = ++state.generation;
+            const attempts = composerRetryDelaysMs.length + 1;
             try {
-                const results = await callRAFrames(
-                    { webContents: wc },
-                    'startComposerTracking',
-                    {}
-                );
-                const missing = (results || []).filter(r => r?.value?.missing);
-                if (missing.length) {
-                    console.warn(
-                        '[layout-css] startComposerTracking MISSING on renderer agent '
-                        + 'in some frames; composer will keep its default width:',
-                        missing
+                for (let attempt = 1; attempt <= attempts; attempt += 1) {
+                    if (wc.isDestroyed?.() || generation !== state.generation) return;
+                    const results = await callRAFrames(
+                        { webContents: wc },
+                        'startComposerTracking',
+                        {}
                     );
+                    if (generation !== state.generation) return;
+                    const missing = (results || []).filter(r => r?.value?.missing);
+                    if (!missing.length) return;
+                    if (attempt === attempts) {
+                        if (missing.some(r => r.frameId === 0)) {
+                            console.warn(
+                                '[layout-css] startComposerTracking: the renderer agent is still '
+                                + `missing from the top frame (${originForLog(wc.getURL?.())}) after `
+                                + `${attempts} attempts; composer will keep its default width until `
+                                + 'the next page load or navigation.'
+                            );
+                        }
+                        return;
+                    }
+                    await new Promise(resolve => {
+                        const timer = setTimeout(resolve, composerRetryDelaysMs[attempt - 1]);
+                        if (typeof timer.unref === 'function') timer.unref();
+                    });
                 }
             } catch (err) {
                 console.error('attachComposerTracking failed:', err);
