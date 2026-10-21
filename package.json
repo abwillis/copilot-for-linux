@@ -1,6 +1,6 @@
 {
   "name": "copilot-for-linux",
-  "version": "3.01.06",
+  "version": "3.01.07",
   "description": "Copilot for Linux",
   "desktopName": "copilot-for-linux",
   "main": "main.js",
@@ -76,6 +76,9 @@
     "rpm": {
       "artifactName": "${name}-${version}.${arch}.rpm",
       "compression": "bzip2"
+    },
+    "deb": {
+      "artifactName": "${name}-${version}.${arch}.deb"
     },
     "win": {
       "target": [
