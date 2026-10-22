@@ -3541,7 +3541,7 @@
         var hasUnsent = described.some(function (d) { return !state.sent[d.key]; });
         if (hasUnsent) {
           try {
-            await expandForPrint({ skipReasoning: false });
+            await expandForPrint({ skipReasoning: opts.expandReasoning === false });
             await canonicalCaptureSettle(settleMs);
             expanded = true;
             described = canonicalDescribeRows(state);
