@@ -276,7 +276,7 @@ test('main window only hands web and mail links to the operating system', () => 
       getTrayImage24: () => noopProxy({ isEmpty: () => false }), setTrayImage24() {},
       getIconPath: () => 'x.png', getInitialWindowBounds: () => ({ width: 800, height: 600 }),
       reveal() {}, setRoleTitle() {}, augmentApplicationMenu() {},
-      registerShowContextMenuIpcHandler() {}, ensureDidStopLoadingHandler() {},
+      ensureDidStopLoadingHandler() {},
       attachCSSAndLayoutHandlers() {}, attachWindowStatePersistence() {}, attachFindResultForwarding() {},
       onDidStopLoading() {}, buildContextMenuTemplate: () => [], registerFindIpcHandlers() {},
       handleEscapeStopFind() {},

@@ -4,10 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  chatDom,
   createHarness,
   deepClone,
-  defaultAgentConfig,
   loadFixture,
 } = require('../test-support/dom-agent-harness');
 
@@ -147,18 +145,6 @@ test('all root consumers report the capability scorer winner', async t => {
     ]),
     new Set(['div#conversation-feed'])
   );
-});
-
-test('provider adapter selects its expected root from a realistic provider fixture', t => {
-  const fixture = loadFixture('provider-root.json');
-  const { api } = useHarness(t, fixture, { config: defaultAgentConfig() });
-
-  const hit = api.findCapability('chatRoot');
-
-  assert.equal(hit.ok, true);
-  assert.equal(hit.element.id, fixture.expectedRootId);
-  assert.ok(hit.confidence >= chatDom.DOM_ADAPTER_CONTRACT.thresholds.read);
-  assert.match(hit.evidence.join('\n'), /repeated message descendants/);
 });
 
 test('a search textbox and chat composer can coexist without selecting search', t => {

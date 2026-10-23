@@ -52,236 +52,6 @@ const DOM_PRESERVE_CONTENT_SELECTORS = [
   'iframe'
 ];
 
-// Print-time CSS injected by the shared PDF exporter, scoped to the marked
-// pane via [data-pdf-export-target="1"]. Each app provides its own selectors
-// because chat-bubble structure is per-app.
-//
-// Copilot: neutralizes the .fai-UserMessage clamp (overflow:hidden +
-// max-height:140px) that caused the PDF to drop user-input text past ~5
-// lines, while keeping the live UI untouched (the stylesheet is removed
-// in the exporter's finally block).
-const PRINT_BUBBLE_CSS = `
-  /* ---------------------------------------------------------------------- */
-  /* 1. Message clamp neutralizer (user and assistant messages).            */
-  /*                                                                        */
-  /* Copilot uses overflow:hidden + max-height clamps to implement "Show    */
-  /* more lines" on both user inputs and assistant cards (incl. answer      */
-  /* cards, citation/reference cards, and reasoning panels). The button     */
-  /* that expands them is not ARIA disclosure, so the rules in section 3    */
-  /* below do not catch them. Lifting the clamp anywhere inside a .fai-*    */
-  /* subtree captures all variants without affecting the Fluent             */
-  /* virtualizer internals (handled separately in section 2).               */
-  /* ---------------------------------------------------------------------- */
-  [data-pdf-export-target="1"] [class*="fai-UserMessage"],
-  [data-pdf-export-target="1"] [class*="fai-UserMessage"] *,
-  [data-pdf-export-target="1"] [class*="fai-CopilotMessage"],
-  [data-pdf-export-target="1"] [class*="fai-CopilotMessage"] *,
-  [data-pdf-export-target="1"] [class*="fai-AssistantMessage"],
-  [data-pdf-export-target="1"] [class*="fai-AssistantMessage"] *,
-  [data-pdf-export-target="1"] [class*="fai-AnswerCard"],
-  [data-pdf-export-target="1"] [class*="fai-AnswerCard"] *,
-  [data-pdf-export-target="1"] [class*="fai-Reference"],
-  [data-pdf-export-target="1"] [class*="fai-Reference"] *,
-  [data-pdf-export-target="1"] [class*="fai-Citation"],
-  [data-pdf-export-target="1"] [class*="fai-Citation"] *,
-  [data-pdf-export-target="1"] [class*="fai-Reasoning"],
-  [data-pdf-export-target="1"] [class*="fai-Reasoning"] *,
-  [data-pdf-export-target="1"] [class*="fai-Sources"],
-  [data-pdf-export-target="1"] [class*="fai-Sources"] * {
-    max-height: none !important;
-    height: auto !important;
-    min-height: 0 !important;
-    min-block-size: 0 !important;
-    overflow: visible !important;
-    overflow-x: visible !important;
-    overflow-y: visible !important;
-    -webkit-line-clamp: unset !important;
-    line-clamp: unset !important;
-  }
-  /* Catch inline-style clamps too — Copilot uses both class-driven and
-     style-driven clamps depending on the component. */
-  [data-pdf-export-target="1"] [class*="fai-"][style*="max-height"],
-  [data-pdf-export-target="1"] [class*="fai-"][style*="-webkit-line-clamp"] {
-    max-height: none !important;
-    -webkit-line-clamp: unset !important;
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* 1b. Chain-of-thought / reasoning panel scroll-container neutralizer.   */
-  /*                                                                        */
-  /* Once expandReasoningForPrint() opens a reasoning panel, its body lives */
-  /* inside scc-ChainOfThought__activitiesPanel — a fixed-height            */
-  /* overflow:auto scroll container, and each "Coding and executing" step   */
-  /* is itself a nested scroll box. These use scc-ChainOfThought* class     */
-  /* hooks, NOT fai-*, so section 1 above does not reach them. Without this */
-  /* the PDF clips each panel to its scroll viewport and only the step      */
-  /* headlines print. Lifting max-height/overflow on the ChainOfThought     */
-  /* subtree lets the full reasoning lay out in flow. Descendant (*) rule   */
-  /* also covers the nested code-output scroll boxes.                       */
-  /* ---------------------------------------------------------------------- */
-  [data-pdf-export-target="1"] [class*="ChainOfThought"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"] * {
-    max-height: none !important;
-    height: auto !important;
-    min-height: 0 !important;
-    min-block-size: 0 !important;
-    max-block-size: none !important;
-    block-size: auto !important;
-    overflow: visible !important;
-    overflow-x: visible !important;
-    overflow-y: visible !important;
-    -webkit-line-clamp: unset !important;
-    line-clamp: unset !important;
-    /* Force rendering of off-screen reasoning subtrees.
-       The app applies content-visibility:auto (plus containment) to reasoning
-       content so Chromium can skip painting it while off-screen. The text is
-       still in the DOM -- a live export measured 3.2M chars of reasoning via
-       textContent -- but printToPDF only paints what Chromium renders, so
-       off-screen panels printed as headlines while the one panel in the
-       viewport printed fully. The renderer log confirms this directly:
-       "Rendering was performed in a subtree hidden by content-visibility."
-       pdfPrepare() does neutralize content-visibility, but it is a one-shot JS
-       walk over the elements that exist at that moment and it runs BEFORE
-       reasoning expansion, so subtrees revealed/re-rendered by the expansion
-       never receive the override. CSS is declarative and therefore also applies
-       to nodes created later, which is why the fix belongs here. */
-    content-visibility: visible !important;
-    contain: none !important;
-    contain-intrinsic-size: auto !important;
-  }
-  /* Specificity boost, mirroring the proven approach in
-     buildFindContentVisibilityCSS() (lib/layout-css.js) that lets Find search
-     these same hidden subtrees. No element has id="_cv", so :not(#_cv) matches
-     everything while contributing ID-level specificity; four of them plus the
-     two attribute selectors give (4,2,0). !important is a separate cascade
-     tier, and among competing !important declarations specificity decides --
-     so this outranks any class-based !important rule the web app ships,
-     without depending on stylesheet source order. */
-  [data-pdf-export-target="1"] [class*="ChainOfThought"]:not(#_cv):not(#_cv):not(#_cv):not(#_cv),
-  [data-pdf-export-target="1"] [class*="ChainOfThought"]:not(#_cv):not(#_cv):not(#_cv):not(#_cv) * {
-    content-visibility: visible !important;
-    contain: none !important;
-    contain-intrinsic-size: auto !important;
-    overflow: visible !important;
-    max-height: none !important;
-  }
-  /* Catch inline-style height/overflow/content-visibility clamps on the
-     reasoning subtree too. Copilot sets some of these via element.style from
-     JS, which class selectors alone do not reach. */
-  [data-pdf-export-target="1"] [class*="ChainOfThought"][style*="max-height"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"] [style*="max-height"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"][style*="overflow"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"] [style*="overflow"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"][style*="content-visibility"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"] [style*="content-visibility"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"][style*="contain"],
-  [data-pdf-export-target="1"] [class*="ChainOfThought"] [style*="contain"] {
-    max-height: none !important;
-    overflow: visible !important;
-    content-visibility: visible !important;
-    contain: none !important;
-    contain-intrinsic-size: auto !important;
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* 2. Defeat Fluent virtualization during print.                          */
-  /*                                                                        */
-  /* The Fluent virtualizer wraps the chat in a container that uses         */
-  /*   contain: strict | size                                               */
-  /*   content-visibility: auto                                             */
-  /*   overflow: auto                                                       */
-  /* and absolute-positions item rows so only the viewport-intersecting     */
-  /* ones are rendered. For PDF export we need all items rendered at once.  */
-  /* Removing those three properties causes the virtualizer's items to lay  */
-  /* out in document order with their natural heights.                      */
-  /* ---------------------------------------------------------------------- */
-  [data-pdf-export-target="1"] [class*="fui-Virtualizer"],
-  [data-pdf-export-target="1"] [class*="fui-Virtualizer"] * {
-    contain: none !important;
-    content-visibility: visible !important;
-    overflow: visible !important;
-    max-height: none !important;
-    height: auto !important;
-  }
-  /* Items inside the virtualizer are positioned absolutely; force flow. */
-  [data-pdf-export-target="1"] [class*="fui-Virtualizer-Scroll-View"] > *,
-  [data-pdf-export-target="1"] [class*="fui-Virtualizer"] > * {
-    position: static !important;
-    transform: none !important;
-    top: auto !important;
-    left: auto !important;
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* 3. Force collapsibles open (citations "Show more", reasoning, etc.).   */
-  /*                                                                        */
-  /* CSS-only: no clicks, no SPA handlers, no risk of opening menus.        */
-  /* Reveals the controlled region directly. Used in citation/sources       */
-  /* cards and answer-card reasoning sections that the JS allow-list does   */
-  /* not match.                                                             */
-  /* ---------------------------------------------------------------------- */
-  [data-pdf-export-target="1"] [aria-expanded="false"] + [hidden],
-  [data-pdf-export-target="1"] [aria-expanded="false"] ~ [aria-hidden="true"],
-  [data-pdf-export-target="1"] [data-state="closed"] {
-    display: revert !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-    max-height: none !important;
-    overflow: visible !important;
-    pointer-events: auto !important;
-  }
-  /* Whatever the trigger controls inside the marked pane: reveal it.       */
-  [data-pdf-export-target="1"] [aria-hidden="true"] {
-    display: revert !important;
-    visibility: visible !important;
-    max-height: none !important;
-    overflow: visible !important;
-  }
-  /* details elements (native disclosure widgets) */
-  [data-pdf-export-target="1"] details {
-    display: block !important;
-  }
-  [data-pdf-export-target="1"] details > *:not(summary) {
-    display: revert !important;
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* 4. Print-paper consistency.                                            */
-  /*                                                                        */
-  /* Paper colors are selected by ExportJob from computed live colors or an */
-  /* explicit light/dark/monochrome mode. Do not force a dark background.   */
-  /* Suppress the trailing blank page that Chromium's printToPDF emits.     */
-  /*     when the document height slightly exceeds an exact page multiple. */
-  /* ---------------------------------------------------------------------- */
-  @media print {
-    html, body {
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-
-    /* (b) Stop trailing whitespace from generating a phantom last page.
-           Drop any margin-bottom / padding-bottom on the marked pane and
-           its last child, and elide any zero-height sibling at the tail. */
-    [data-pdf-export-target="1"] {
-      margin-bottom: 0 !important;
-      padding-bottom: 0 !important;
-    }
-    [data-pdf-export-target="1"] > *:last-child,
-    [data-pdf-export-target="1"] [class*="fai-"]:last-child {
-      margin-bottom: 0 !important;
-      padding-bottom: 0 !important;
-    }
-
-    /* Page boxes themselves: zero default margins so Chromium does not
-       inflate the bottom of the last page. The printToPDF call already
-       supplies marginsType: 1 (minimum), but @page is what Chromium reads
-       when preferCSSPageSize is set. */
-    @page {
-      margin: 0.4in;
-    }
-  }
-`;
-
 // Selectors that identify the app's virtualized scroller. Used by the
 // shared renderer/agent.js to hydrate off-viewport messages before PDF
 // export. Each entry is a CSS selector string; the agent tries them in
@@ -329,6 +99,26 @@ const DOM_COLLECTION_SELECTORS = [
   '[class*="fai-AssistantMessage"]',
   '[class*="fai-AnswerCard"]',
 ];
+
+// Which collection selectors identify a user turn and which an assistant turn.
+// The shared renderer agent classifies rows with these lists instead of
+// guessing from keywords in the selector text.
+const DOM_ROLE_SELECTORS = Object.freeze({
+  user: Object.freeze([
+    '[class*="fai-UserMessage"]',
+  ]),
+  assistant: Object.freeze([
+    '[id^="copilot-message-"]',
+    '[class*="fai-AssistantMessage"]',
+    '[class*="fai-AnswerCard"]',
+  ]),
+});
+
+// Visible label that separates a turn's user text from the assistant's answer,
+// and the app name that can repeat right after it. Empty / absent means the
+// app has no such label.
+const ANSWER_MARKER = 'Copilot said:';
+const ANSWER_LEADING_LABELS = Object.freeze(['Copilot']);
 
 const DOM_COLLECTION_ROW_SELECTORS = [
   '[class*="fui-Virtualizer"]',
@@ -446,7 +236,6 @@ const DOM_CLEANUP_POLICY = Object.freeze({
   ])
 });
 
-
 module.exports = {
   CHAT_ROOT_SELECTORS,
   CHAT_MESSAGE_LIST_SELECTORS,
@@ -461,10 +250,12 @@ module.exports = {
   DOM_CLEANUP_POLICY,
   DOM_ADAPTER_CONTRACT,
   DOM_PRESERVE_CONTENT_SELECTORS,
-  PRINT_BUBBLE_CSS,
   VIRTUALIZER_SELECTORS,
   DOM_SCORE_RULES,
   DOM_COLLECTION_SELECTORS,
+  DOM_ROLE_SELECTORS,
+  ANSWER_MARKER,
+  ANSWER_LEADING_LABELS,
   DOM_COLLECTION_ROW_SELECTORS,
   DOM_COLLECTION_EXCLUDE_SELECTORS,
   DOM_COLLECTION_KEY_ATTRIBUTES,

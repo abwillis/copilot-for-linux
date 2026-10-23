@@ -37,9 +37,11 @@ const {
   CHAT_MESSAGE_LIST_SELECTOR, CHAT_MESSAGE_LIST_PSEUDO,
   EXPORT_ROOT_CLASS, EXPORT_ROOT_SELECTOR,
   CODE_PREVIEW_IFRAME_SELECTOR, DOM_CLEANUP_SELECTORS, DOM_CLEANUP_POLICY, DOM_ADAPTER_CONTRACT, DOM_PRESERVE_CONTENT_SELECTORS,
-  PRINT_BUBBLE_CSS,
   VIRTUALIZER_SELECTORS,
   DOM_COLLECTION_SELECTORS,
+  DOM_ROLE_SELECTORS,
+  ANSWER_MARKER,
+  ANSWER_LEADING_LABELS,
   DOM_COLLECTION_KEY_ATTRIBUTES,
   DOM_COLLECTION_ROW_SELECTORS,
   DOM_COLLECTION_EXCLUDE_SELECTORS,
@@ -111,6 +113,9 @@ function initRendererAgentInstaller() {
       preserveSelectors: DOM_PRESERVE_CONTENT_SELECTORS,
       virtualizerSelectors: VIRTUALIZER_SELECTORS,
       collectionSelectors: DOM_COLLECTION_SELECTORS,
+      roleSelectors: DOM_ROLE_SELECTORS,
+      answerMarker: ANSWER_MARKER,
+      answerLeadingLabels: ANSWER_LEADING_LABELS,
       collectionKeyAttributes: DOM_COLLECTION_KEY_ATTRIBUTES,
       collectionRowSelectors: DOM_COLLECTION_ROW_SELECTORS,
       collectionExcludeSelectors: DOM_COLLECTION_EXCLUDE_SELECTORS,
@@ -442,7 +447,6 @@ function initExporters() {
     safeShowError,
     getAppPartition: () => APP_PARTITION,
     appSlug: APP_SLUG,
-    PRINT_BUBBLE_CSS,
     CHAT_SCOPE_PSEUDO,
     EXPORT_ROOT_CLASS,
     EXPORT_ROOT_SELECTOR,
@@ -499,7 +503,7 @@ let contextMenuInstance = null;
 function initContextMenu() {
   if (contextMenuInstance) return contextMenuInstance;
   contextMenuInstance = createContextMenu({
-    Menu, MenuItem, clipboard, shell, BrowserWindow, dialog, ipcMain,
+    Menu, MenuItem, clipboard, shell, dialog,
     getAppConfig, SEND_MODE, EXPORT_SCOPES,
     selectChatPane, promptSaveChatPane, getSelectionFragment,
     htmlToMarkdown, buildSendToQuickSubmenu, createQuickChatWindow,
@@ -510,9 +514,6 @@ function initContextMenu() {
 }
 function buildContextMenuTemplate(...args) {
     return initContextMenu().buildContextMenuTemplate(...args);
-}
-function registerShowContextMenuIpcHandler(...args) {
-    return initContextMenu().registerShowContextMenuIpcHandler(...args);
 }
 
 // ---------- Quick Chat module bridge ----------
@@ -870,7 +871,6 @@ function initMainWindowManager() {
     reveal,
     setRoleTitle,
     augmentApplicationMenu,
-    registerShowContextMenuIpcHandler,
     ensureDidStopLoadingHandler,
     attachCSSAndLayoutHandlers,
     attachWindowStatePersistence,

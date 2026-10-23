@@ -5,7 +5,7 @@
 //
 // When installed, exposes a configured window renderer API with:
 //   init({ chatRootSelectors, junkSelectors, preserveSelectors })
-//   locateChatRoot(options)  -- behavioral twin of buildLocateChatRootScript
+//   locateChatRoot(options)  -- finds the active chat root
 //   clearExportMarker()      -- removes [data-pdf-export-target] tags
 //   getSelectionFragment()   -- returns current selection as { html, text }
 //   extractScopedImages(ids) -- extracts data URIs for marked export images
@@ -17,10 +17,10 @@
 //   indexFindConversation()        -- cancellable virtualizer scroll walk
 //   disableFindContentVisibility() -- restore exact Find-time mutations
 //
-// The main process calls it by name instead of shipping the full body of
-// buildChatPaneDetectionScript on every export/find/select. The function
-// must be valid as a top-level script in the remote page; no Node APIs,
-// no contextBridge, no imports.
+// The main process calls it by name instead of shipping a full detection
+// script on every export/find/select. The function must be valid as a
+// top-level script in the remote page; no Node APIs, no contextBridge, no
+// imports.
 (function installRendererAgent() {
   var RENDERER_API_GLOBAL = '__appRenderer';
   var RENDERER_AGENT_VERSION = 1;
@@ -79,6 +79,14 @@
   var DOM_COLLECTION_ROW_SELECTORS = [];
   var DOM_COLLECTION_EXCLUDE_SELECTORS = [];
   var REASONING_EXPAND_SELECTORS = [];
+
+  // Per-app role hints and answer-label text, populated by init() from each
+  // app's chat-dom.js. Empty values mean "unknown": role detection then falls
+  // back to neutral keywords in the collection selectors, and no answer
+  // marker is searched for.
+  var DOM_ROLE_SELECTORS = { user: [], assistant: [] };
+  var ANSWER_MARKER = '';
+  var ANSWER_LEADING_LABELS = [];
 
   // Attribute used to disambiguate the chosen pane during PDF export.
   var EXPORT_MARKER_ATTR = 'data-pdf-export-target';
@@ -2719,7 +2727,7 @@
         ).trim().toLowerCase();
           if (
             /^show more$|^see more$|^read more$|^show all$|^expand$/.test(label) ||
-            /^(?:copilot\s+)?reasoning completed in \d+ steps?[!.]?$/.test(label)
+            /^(?:[a-z]+\s+)?reasoning completed in \d+ steps?[!.]?$/.test(label)
           ) {
             return true;
           }
@@ -3320,17 +3328,59 @@
     });
   }
 
-  function canonicalCaptureRole(row) {
-    var user = false;
-    var assistant = false;
+  // Role selectors come from the app's chat-dom.js. When an app supplies none
+  // (older boot payloads, bare test configs) fall back to neutral keywords in
+  // the collection selectors; no app name is baked into the fallback.
+  function roleSelectorLists() {
+    if (DOM_ROLE_SELECTORS.user.length || DOM_ROLE_SELECTORS.assistant.length) {
+      return DOM_ROLE_SELECTORS;
+    }
+    var lists = { user: [], assistant: [] };
     for (var i = 0; i < DOM_COLLECTION_SELECTORS.length; i++) {
       var selector = String(DOM_COLLECTION_SELECTORS[i] || '');
+      if (/user|request|prompt/i.test(selector)) lists.user.push(selector);
+      if (/assistant|answer|response/i.test(selector)) lists.assistant.push(selector);
+    }
+    return lists;
+  }
+
+  function elementMatchesAnySelector(el, selectors) {
+    for (var i = 0; i < selectors.length; i++) {
       try {
-        if (!(row.matches(selector) || row.querySelector(selector))) continue;
-        if (/user|request|prompt/i.test(selector)) user = true;
-        if (/assistant|copilot|answer|response/i.test(selector)) assistant = true;
+        if (el.matches(selectors[i]) || el.querySelector(selectors[i])) return true;
       } catch (e) {}
     }
+    return false;
+  }
+
+  // Caller options win; otherwise use the marker configured by init().
+  // An empty marker means "this app has none", so it is never searched for.
+  function resolveAnswerMarker(opts) {
+    if (opts && typeof opts.answerMarker === 'string') return opts.answerMarker;
+    return ANSWER_MARKER;
+  }
+
+  function indexOfAnswerMarker(text, marker) {
+    return marker ? text.lastIndexOf(marker) : -1;
+  }
+
+  // Some apps repeat their own name right after the marker; drop it so only
+  // the answer body is measured. Labels come from chat-dom.js.
+  function stripAnswerLeadingLabel(text) {
+    var lowered = text.toLowerCase();
+    for (var i = 0; i < ANSWER_LEADING_LABELS.length; i++) {
+      var label = ANSWER_LEADING_LABELS[i].toLowerCase();
+      if (lowered.indexOf(label) !== 0) continue;
+      if (/[a-z0-9_]/i.test(text.charAt(label.length))) continue;
+      return text.slice(label.length).trim();
+    }
+    return text;
+  }
+
+  function canonicalCaptureRole(row) {
+    var lists = roleSelectorLists();
+    var user = elementMatchesAnySelector(row, lists.user);
+    var assistant = elementMatchesAnySelector(row, lists.assistant);
     if (assistant && !user) return 'assistant';
     if (user && !assistant) return 'user';
     if (user && assistant) return 'mixed';
@@ -4166,6 +4216,22 @@
     if (Array.isArray(c.reasoningExpandSelectors)) {
       REASONING_EXPAND_SELECTORS = c.reasoningExpandSelectors
         .map(function (selector) { return String(selector || '').trim(); })
+        .filter(Boolean);
+    }
+    if (c.roleSelectors && typeof c.roleSelectors === 'object') {
+      ['user', 'assistant'].forEach(function (role) {
+        if (!Array.isArray(c.roleSelectors[role])) return;
+        DOM_ROLE_SELECTORS[role] = c.roleSelectors[role]
+          .map(function (selector) { return String(selector || '').trim(); })
+          .filter(Boolean);
+      });
+    }
+    if (typeof c.answerMarker === 'string') {
+      ANSWER_MARKER = c.answerMarker.trim();
+    }
+    if (Array.isArray(c.answerLeadingLabels)) {
+      ANSWER_LEADING_LABELS = c.answerLeadingLabels
+        .map(function (label) { return String(label || '').trim(); })
         .filter(Boolean);
     }
     return { ok: true };
@@ -5484,7 +5550,7 @@ function waitForPrintableAssets(options) {
   //
   // Purpose: answer two questions with runtime DOM facts instead of inference.
   //
-  //   PRIMARY  -- Why are Copilot (assistant) responses missing from the PDF?
+  //   PRIMARY  -- Why are assistant responses missing from the PDF?
   //     Enumerates the conversation rows (reusing getDiagnosticRows so it sees
   //     exactly what the exporter's other diagnostics see), classifies each as
   //     user / assistant / mixed / unknown, and records connectivity, geometry
@@ -5502,8 +5568,8 @@ function waitForPrintableAssets(options) {
   //     present-but-hidden target means CSS/allow-list can reveal it.
   //
   // This is read-only. It mutates nothing and never clicks. Classification is
-  // derived from the caller-configured DOM_COLLECTION_SELECTORS (by keyword),
-  // so it introduces no new app-specific fingerprints into the shared agent.
+  // taken from the per-app role selectors configured through init(), so it
+  // introduces no app-specific fingerprints into the shared agent.
   // -------------------------------------------------------------------------
   function capturePdfConversationDiagnostic(options) {
     var opts = options || {};
@@ -5514,23 +5580,18 @@ function waitForPrintableAssets(options) {
     var maxReasoningPerRow = Number(opts.maxReasoningPerRow || 6);
     var includeContent = opts.includeContent === true;
     // Marker separating a turn's user text from the assistant's answer.
-    // Caller-supplied so this shared file stays project-neutral.
-    var answerMarker = String(opts.answerMarker || 'Copilot said:');
+    // Supplied by the app's chat-dom.js (or the caller) so this shared file
+    // stays project-neutral.
+    var answerMarker = resolveAnswerMarker(opts);
 
     try {
       var root = getPdfTargetPane(fallbackSelector);
       if (!root) return { ok: false, stage: stage, error: 'chat pane not found' };
 
-      // Split the configured collection selectors into role hints by keyword.
-      var userHints = [];
-      var assistantHints = [];
-      try {
-        for (var s = 0; s < DOM_COLLECTION_SELECTORS.length; s++) {
-          var sel = String(DOM_COLLECTION_SELECTORS[s] || '');
-          if (/user/i.test(sel)) userHints.push(sel);
-          if (/assistant|copilot|answer/i.test(sel)) assistantHints.push(sel);
-        }
-      } catch (e) {}
+      // Role hints come from the per-app role selectors.
+      var roleLists = roleSelectorLists();
+      var userHints = roleLists.user.slice();
+      var assistantHints = roleLists.assistant.slice();
 
       function matchesAny(el, list) {
         for (var i = 0; i < list.length; i++) {
@@ -5674,10 +5735,10 @@ function waitForPrintableAssets(options) {
       function answerBodyOf(el) {
         function bodyFrom(raw) {
           var t = String(raw || '').replace(/\s+/g, ' ').trim();
-          var idx = t.lastIndexOf(answerMarker);
+          var idx = indexOfAnswerMarker(t, answerMarker);
           if (idx < 0) return { present: false, len: 0, preview: '' };
           var after = t.slice(idx + answerMarker.length).trim();
-          after = after.replace(/^copilot\b/i, '').trim();
+          after = stripAnswerLeadingLabel(after);
           after = after.replace(/\bsources\b/gi, '').trim();
           return {
             present: true,
@@ -6555,10 +6616,8 @@ function waitForPrintableAssets(options) {
     try { rows = getDiagnosticRows(root); } catch (e) {}
     var fingerprints = [];
     var emptyAssistantBodyCount = 0;
-    var assistantHints = DOM_COLLECTION_SELECTORS.filter(function (selector) {
-      return /assistant|copilot|answer/i.test(String(selector || ''));
-    });
-    var answerMarker = String(opts.answerMarker || 'Copilot said:');
+    var assistantHints = roleSelectorLists().assistant;
+    var answerMarker = resolveAnswerMarker(opts);
     for (var i = 0; i < rows.length; i++) {
       var text = '';
       try { text = String(rows[i].textContent || '').replace(/\s+/g, ' ').trim(); } catch (e) {}
@@ -6573,7 +6632,7 @@ function waitForPrintableAssets(options) {
         } catch (e) {}
       }
       if (assistant) {
-        var markerIndex = text.lastIndexOf(answerMarker);
+        var markerIndex = indexOfAnswerMarker(text, answerMarker);
         var body = markerIndex >= 0 ? text.slice(markerIndex + answerMarker.length).trim() : text;
         if (body.length < 2) emptyAssistantBodyCount++;
       }
@@ -6841,9 +6900,7 @@ function waitForPrintableAssets(options) {
       var fingerprints = rows.map(function (row) { return stableExportFingerprint(row.textContent || ''); });
       var monotonic = true, lastIndex = null;
       var emptyAssistantBodyCount = 0;
-      var assistantHints = DOM_COLLECTION_SELECTORS.filter(function (selector) {
-        return /assistant|copilot|answer/i.test(String(selector || ''));
-      });
+      var assistantHints = roleSelectorLists().assistant;
       rows.forEach(function (row) {
         var raw = row.getAttribute && (row.getAttribute('aria-posinset') || row.getAttribute('data-index') || row.getAttribute('data-item-index'));
         var index = raw === null || raw === '' ? null : Number(raw);
@@ -6860,8 +6917,8 @@ function waitForPrintableAssets(options) {
         }
         if (assistant) {
           var text = String(row.textContent || '').replace(/\s+/g, ' ').trim();
-          var marker = String(opts.answerMarker || 'Copilot said:');
-          var markerIndex = text.lastIndexOf(marker);
+          var marker = resolveAnswerMarker(opts);
+          var markerIndex = indexOfAnswerMarker(text, marker);
           var body = markerIndex >= 0 ? text.slice(markerIndex + marker.length).trim() : text;
           if (body.length < 2) emptyAssistantBodyCount++;
         }

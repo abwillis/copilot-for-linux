@@ -118,7 +118,7 @@ const defaultAppConfig = Object.freeze({
   exportAssetFetchTimeoutMs: 20000,
   exportAssetMaxBytes: 26214400,
   exportAssetCacheMaxBytes: 16777216,
-  enableConsoleLogging: true,
+  enableConsoleLogging: false,
   enableFileLogging: false,
   logFileName: 'copilot-for-linux.log',
   // File writes are buffered and asynchronous. The active file plus four

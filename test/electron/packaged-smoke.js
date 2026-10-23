@@ -74,7 +74,6 @@ async function runPackagedSmoke(deps) {
       BrowserWindow,
       dialog: require('electron').dialog,
       safeShowError: (title, message) => { throw new Error(`${title}: ${message}`); },
-      PRINT_BUBBLE_CSS: chatDom.PRINT_BUBBLE_CSS,
       CHAT_SCOPE_PSEUDO: chatDom.CHAT_SCOPE_PSEUDO,
       EXPORT_ROOT_CLASS: chatDom.EXPORT_ROOT_CLASS,
       EXPORT_ROOT_SELECTOR: chatDom.EXPORT_ROOT_SELECTOR,
