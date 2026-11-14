@@ -2,3 +2,6 @@ dist/
 reference/
 node_modules/
 *.diff
+*.patch
+repo_bundle.txt
+copilot_repobundle.txt
